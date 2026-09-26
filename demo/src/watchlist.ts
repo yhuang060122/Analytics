@@ -1,6 +1,6 @@
 import "./style.css";
 import { analytics } from "./analytics";
-import { mountDevBar } from "./devbar";
+import { mountInspectorToolbar } from "./inspector-toolbar";
 
 const newsEl =
   document.querySelector<HTMLUListElement>("#news")!;
@@ -31,4 +31,4 @@ loadNewsBtn.addEventListener("click", () => {
   void loadNews();
 });
 
-mountDevBar(document.querySelector("#devbar")!);
+mountInspectorToolbar();

@@ -1,6 +1,6 @@
 import "./style.css";
 import { analytics } from "./analytics";
-import { mountDevBar } from "./devbar";
+import { mountInspectorToolbar } from "./inspector-toolbar";
 
 interface Holding {
   symbol: string;
@@ -20,7 +20,7 @@ function renderHoldings(holdings: readonly Holding[]): void {
       (holding) => `
         <li>
           <b>${holding.symbol}</b>
-          <span>${holding.shares} 股</span>
+          <span>${holding.shares} shares</span>
           <span class="num">¥${holding.value.toFixed(2)}</span>
         </li>
       `,
@@ -63,6 +63,6 @@ document
     });
   });
 
-mountDevBar(document.querySelector("#devbar")!);
+mountInspectorToolbar();
 
 void refresh();

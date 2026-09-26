@@ -39,9 +39,9 @@ function analyticsMockApi(): Plugin {
               );
 
               server.config.logger.info(
-                "[mock-api] 500 ← 模拟故障，丢弃 " +
+                "[mock-api] 500 ← simulated outage, dropped " +
                   (JSON.parse(body || "{}").events ?? []).length +
-                  " 条事件",
+                  " events",
               );
 
               return;
@@ -52,7 +52,7 @@ function analyticsMockApi(): Plugin {
             received.push(...batch);
 
             server.config.logger.info(
-              `\n[mock-api] 收到 ${batch.length} 条事件（累计 ${received.length}）`,
+              `\n[mock-api] received ${batch.length} events (total ${received.length})`,
             );
 
             batch.forEach((context: any) =>
@@ -74,7 +74,7 @@ function analyticsMockApi(): Plugin {
           failing = String(req.url ?? "").includes("state=on");
 
           server.config.logger.info(
-            `[mock-api] 后端故障 ${failing ? "ON" : "OFF"}`,
+            `[mock-api] outage ${failing ? "ON" : "OFF"}`,
           );
 
           res.setHeader("Content-Type", "application/json");
@@ -100,9 +100,9 @@ function analyticsMockApi(): Plugin {
         res.setHeader("Content-Type", "application/json");
         res.end(
           JSON.stringify([
-            "NVDA 财报超预期，盘后涨 6%",
-            "AAPL 宣布新的回购计划",
-            "MSFT 云业务增速回升",
+            "NVDA beats earnings estimates, up 6% after hours",
+            "AAPL announces a new buyback program",
+            "MSFT cloud growth picks up again",
           ]),
         );
       });

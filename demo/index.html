@@ -1,69 +1,74 @@
 <!doctype html>
-<html lang="zh-CN">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<html lang="en" data-page-node-id="WlDEjrM1IYBdqk2EkR7tUy">
+  <head data-page-node-id="Nc5s3zeiepqS37sXfumxHi">
+    <meta charset="UTF-8" data-page-node-id="7fumGQyXRnV7utbuymrPUL" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" data-page-node-id="X8oqx43txnLCPx3wyiYoxE" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" data-page-node-id="qR3yPKipMVKXXBxTMH2z2K" />
     <title>Analytics SDK · Demo</title>
   </head>
-  <body>
-    <main class="wrap">
+  <body data-page-node-id="beaZEgfj0jCgfdlhtJwW3L">
+    <main class="wrap" data-page-node-id="hfmKk7HlcRFD5sXXkcxQcD">
 
-      <header class="page-head">
-        <h1>Analytics SDK Demo</h1>
-        <p class="lead">
-          控制台里能看到 Debug 输出的五个阶段：QUEUED → FLUSHING → SENT；
-          右下角 Inspector 面板同步显示同一条链路。
+      <header class="page-head" data-page-node-id="4FyjDsWzpEv8VW2oDuZ2PS">
+        <h1 data-page-node-id="HJnpFFIFxGrruX8aGhwzQe">Analytics SDK Demo</h1>
+        <p class="lead" data-page-node-id="qxaPXIugFZqFY4G65NaD3E">
+          The console logs all five debug stages: QUEUED →
+          FLUSHING → SENT. The Inspector panel in the
+          bottom-right corner shows the same pipeline.
         </p>
       </header>
 
-      <section class="card">
-        <h2>页面跳转</h2>
-        <p>
-          PageTracker 在每个页面进入时上报一次 page 事件，
-          session 存在 sessionStorage，跨页面保持一致。
+      <section class="card" data-page-node-id="b8HCNM1ew6dKEYlYw1ux0s">
+        <h2 data-page-node-id="31CYRLiKCB5BR2MacGucqp">Page navigation</h2>
+        <p data-page-node-id="NYwrF2z2tSOA0ZO8CTRsKM">
+          PageTracker reports one page event on every page
+          entry. The session lives in sessionStorage, so it
+          stays consistent across pages.
         </p>
-        <div class="row">
-          <a class="btn" href="/portfolio.html" data-analytics="进入 Portfolio">
+        <div class="row" data-page-node-id="CCC4OpBRgWJ3jE8maDLAJn">
+          <a class="btn" href="/portfolio.html" data-analytics="Open Portfolio" data-page-node-id="Dn4fzwWuZmmmK4LvMBrE0L">
             Portfolio
           </a>
-          <a class="btn" href="/watchlist.html" data-analytics="进入 Watchlist">
+          <a class="btn" href="/watchlist.html" data-analytics="Open Watchlist" data-page-node-id="FvUDymhLew7Qk4W0tB5xH9">
             Watchlist
           </a>
         </div>
       </section>
 
-      <section class="card">
-        <h2>自动点击追踪</h2>
-        <p>
-          带 <code>data-analytics</code> 属性的元素被点击时，
-          ClickTracker 自动上报 Element Clicked。
+      <section class="card" data-page-node-id="c7jdKQKvOwjlTiv82oQtfn">
+        <h2 data-page-node-id="koO7JtDZIkkKrbGR4SqfyQ">Automatic click tracking</h2>
+        <p data-page-node-id="G3oAmHBQwri1LKARER3hzw">
+          Clicking any element with a
+          <code data-page-node-id="MDHuQOmiYlvzQNTvxFY4uG">data-analytics</code> attribute makes
+          ClickTracker report Element Clicked.
         </p>
-        <div class="row">
-          <button class="btn" data-analytics="主按钮 A">
-            主按钮 A
+        <div class="row" data-page-node-id="KttfgENY3b6vmSGXh2SmYe">
+          <button class="btn" data-analytics="Primary button A" data-page-node-id="48bnO72W0DEGWgygZ3UyX6">
+            Primary button A
           </button>
-          <button class="btn ghost" data-analytics="次要按钮 B">
-            次要按钮 B
+          <button class="btn ghost" data-analytics="Secondary button B" data-page-node-id="Ae8ZMEbYC6FnCIaf9NAvCb">
+            Secondary button B
           </button>
-          <button class="btn ghost" id="counterBtn" data-analytics="计数器">
-            点击计数：0
-          </button>
-        </div>
-      </section>
-
-      <section class="card">
-        <h2>手动事件</h2>
-        <p>直接调用 <code>analytics.track()</code>，可携带自定义属性。</p>
-        <div class="row">
-          <button class="btn" id="checkoutBtn">模拟下单</button>
-          <button class="btn ghost" id="burstBtn">
-            连发 10 条（看批量发送）
+          <button class="btn ghost" id="counterBtn" data-analytics="Counter" data-page-node-id="tEFncd2pqQRJG2KZ8D28EH">
+            Clicks: 0
           </button>
         </div>
       </section>
 
-      <div id="devbar"></div>
+      <section class="card" data-page-node-id="LsCWHSFfiISyUkzacItvO7">
+        <h2 data-page-node-id="KW1EbUCzMJk6z1OL6F7X9b">Manual events</h2>
+        <p data-page-node-id="jSX9ju9DCvjF3KEYf6wss7">
+          Call <code data-page-node-id="vXgKG9c4fgpH8J7kvIXYfl">analytics.track()</code> directly, with
+          custom properties.
+        </p>
+        <div class="row" data-page-node-id="xon34sEVUHAutrLkhsqXCy">
+          <button class="btn" id="checkoutBtn" data-page-node-id="cD11YfLWFBWgPxE1O3Hksu">Simulate checkout</button>
+          <button class="btn ghost" id="burstBtn" data-page-node-id="t8jRcXTM09fDS0P2AUEed1">
+            Send 10 events (watch batching)
+          </button>
+        </div>
+      </section>
+
 
     </main>
 

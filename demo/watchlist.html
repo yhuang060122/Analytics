@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
@@ -10,13 +10,16 @@
     <main class="wrap">
 
       <header class="page-head">
-        <a class="crumb" href="/index.html">← 返回 Demo 首页</a>
+        <a class="crumb" href="/index.html">← Back to demo home</a>
         <h1>Watchlist</h1>
-        <p class="lead">第二个页面：验证 session 与队列行为的一致性。</p>
+        <p class="lead">
+          A second page: verifies the session and the queue
+          behave consistently across navigation.
+        </p>
       </header>
 
       <section class="card">
-        <h2>自选股</h2>
+        <h2>Watchlist</h2>
         <div class="row">
           <button class="btn" data-analytics="Open AAPL">Open AAPL</button>
           <button class="btn ghost" data-analytics="Favorite AAPL">
@@ -32,17 +35,19 @@
       </section>
 
       <section class="card">
-        <h2>新闻</h2>
-        <p>加载失败也能被看到：先打开工具条里的「后端故障」再刷新。</p>
+        <h2>News</h2>
+        <p>
+          Failures are visible too: switch on
+          <b>Outage</b> in the toolbar, then reload.
+        </p>
         <div class="row">
           <button class="btn" id="loadNews">Load News</button>
         </div>
         <ul class="list" id="news">
-          <li class="empty">尚未加载</li>
+          <li class="empty">Not loaded yet</li>
         </ul>
       </section>
 
-      <div id="devbar"></div>
 
     </main>
 

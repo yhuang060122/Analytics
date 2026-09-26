@@ -2,7 +2,7 @@
 
 import { DebugEventBus } from "./event-bus";
 import { DebugInspector } from "./debug-inspector";
-import { DebugEvent } from "./debug-event";
+import type { DebugEvent } from "./debug-event";
 
 export interface DebugOptions {
   enabled?: boolean;
@@ -102,6 +102,15 @@ export class DebugController {
     this.inspectorView = new DebugInspector(this.bus);
     this.inspectorView.start();
 
+  }
+
+  /**
+   * The on-page inspector panel, if enabled.
+   * Host apps can mount controls into it via
+   * `getInspector()?.getToolbar()`.
+   */
+  getInspector(): DebugInspector | undefined {
+    return this.inspectorView;
   }
 
 }

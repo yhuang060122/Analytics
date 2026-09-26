@@ -14,10 +14,13 @@ export class FetchTracker {
 
   private readonly ignoreUrls: string[];
 
+  private readonly analytics: Analytics;
+
   constructor(
-    private readonly analytics: Analytics,
+    analytics: Analytics,
     options: FetchTrackerOptions = {},
   ) {
+    this.analytics = analytics;
     this.ignoreUrls = options.ignoreUrls ?? ["/api/analytics/events"];
   }
 
@@ -26,7 +29,9 @@ export class FetchTracker {
       return;
     }
 
-    this.originalFetch = window.fetch;
+    // bind(): a detached window.fetch call throws
+    // "Illegal invocation" in browsers.
+    this.originalFetch = window.fetch.bind(window);
 
     window.fetch = this.interceptFetch;
   }

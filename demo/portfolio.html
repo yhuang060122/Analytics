@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
@@ -10,10 +10,11 @@
     <main class="wrap">
 
       <header class="page-head">
-        <a class="crumb" href="/index.html">← 返回 Demo 首页</a>
+        <a class="crumb" href="/index.html">← Back to demo home</a>
         <h1>Portfolio</h1>
         <p class="lead">
-          演示自动点击追踪 + FetchTracker 拦截同源 API 请求。
+          Automatic click tracking + FetchTracker
+          intercepting same-origin API calls.
         </p>
       </header>
 
@@ -30,20 +31,19 @@
       </section>
 
       <section class="card">
-        <h2>持仓</h2>
+        <h2>Holdings</h2>
         <p>
-          点刷新会走 <code>fetch("/api/portfolio")</code>，
-          FetchTracker 会额外上报一条 API Request。
+          Refresh calls <code>fetch("/api/portfolio")</code>,
+          so FetchTracker reports an extra API Request.
         </p>
         <div class="row">
           <button class="btn" id="refreshBtn">Refresh Portfolio</button>
         </div>
         <ul class="list" id="holdings">
-          <li class="empty">尚未加载</li>
+          <li class="empty">Not loaded yet</li>
         </ul>
       </section>
 
-      <div id="devbar"></div>
 
     </main>
 

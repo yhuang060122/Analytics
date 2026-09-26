@@ -1,6 +1,6 @@
 import "./style.css";
 import { analytics } from "./analytics";
-import { mountDevBar } from "./devbar";
+import { mountInspectorToolbar } from "./inspector-toolbar";
 
 const counterBtn =
   document.querySelector<HTMLButtonElement>("#counterBtn")!;
@@ -10,7 +10,7 @@ let counter = 0;
 counterBtn.addEventListener("click", () => {
   counter += 1;
 
-  counterBtn.textContent = `点击计数：${counter}`;
+  counterBtn.textContent = `Clicks: ${counter}`;
 
   // Auto click tracking fires too: this adds the payload.
   analytics.track("Counter Clicked", { count: counter });
@@ -34,4 +34,4 @@ document
     }
   });
 
-mountDevBar(document.querySelector("#devbar")!);
+mountInspectorToolbar();

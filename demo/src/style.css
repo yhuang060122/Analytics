@@ -190,33 +190,3 @@ code {
   opacity: 0.6;
 }
 
-.devbar {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 32px;
-  padding: 12px 14px;
-  border: 1px dashed var(--border);
-  border-radius: 10px;
-  font-size: 13px;
-}
-
-.devbar-off {
-  opacity: 0.5;
-}
-
-.devbar-title {
-  font-weight: 500;
-  color: var(--text-h);
-}
-
-.devbar-stat {
-  font-family: var(--mono);
-  font-size: 12px;
-  margin-right: auto;
-}
-
-.devbar-stat b {
-  color: var(--accent);
-}
