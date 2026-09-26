@@ -1,13 +1,13 @@
-import { AutoTrackManager } from "../../adapters/browser/auto-track";
 import { DebugController } from "../debug/debug-controller";
 import { EventFactory } from "../factory";
 import { EventQueue } from "../queue";
 import { HttpDestination } from "../transport";
-import { AnalyticsConfig } from "./config";
+import type { AnalyticsConfig } from "./config";
+import type { EventRecorder, Tracker } from "./tracker";
 
-export class Analytics {
+export class Analytics implements EventRecorder {
 
-  private readonly autoTrack?: AutoTrackManager;
+  private readonly trackers: Tracker[] = [];
 
   readonly debug: DebugController;
   private readonly factory: EventFactory;
@@ -38,24 +38,44 @@ export class Analytics {
 
     this.factory = new EventFactory(this.debug);
 
-    if (config.autoTrack) {
-
-      this.autoTrack = new AutoTrackManager(
-        this,
-        config.autoTrack
-      );
-
-      this.autoTrack.start();
-
-    }
-
     this.registerLifecycle();
 
   }
 
   destroy(): void {
 
-    this.autoTrack?.stop();
+    this.unregisterAll();
+
+  }
+
+  /**
+   * Register a probe. It is NOT started here: when to
+   * start is the composition root's decision.
+   */
+  registerTracker(tracker: Tracker): void {
+    this.trackers.push(tracker);
+  }
+
+  /**
+   * Stop a probe and drop it from the registry.
+   */
+  unregisterTracker(tracker: Tracker): void {
+
+    const index = this.trackers.indexOf(tracker);
+
+    if (index === -1) return;
+
+    this.trackers.splice(index, 1);
+
+    tracker.stop();
+
+  }
+
+  private unregisterAll(): void {
+
+    this.trackers
+      .splice(0)
+      .forEach(tracker => tracker.stop());
 
   }
 

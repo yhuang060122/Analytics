@@ -1,4 +1,4 @@
-import { Analytics } from "../../core/api/analytics";
+import type { EventRecorder, Tracker } from "../../core/api/tracker";
 
 export interface ClickTrackerOptions {
   /**
@@ -8,18 +8,25 @@ export interface ClickTrackerOptions {
   attribute?: string;
 }
 
-export class ClickTracker {
+export class ClickTracker implements Tracker {
 
+  private readonly recorder: EventRecorder;
   private readonly attribute: string;
+  private running = false;
 
   constructor(
-    private readonly analytics: Analytics,
+    recorder: EventRecorder,
     options: ClickTrackerOptions = {}
   ) {
+    this.recorder = recorder;
     this.attribute = options.attribute ?? "data-analytics";
   }
 
   start(): void {
+
+    if (this.running) return;
+
+    this.running = true;
 
     document.addEventListener(
       "click",
@@ -30,6 +37,10 @@ export class ClickTracker {
   }
 
   stop(): void {
+
+    if (!this.running) return;
+
+    this.running = false;
 
     document.removeEventListener(
       "click",
@@ -59,7 +70,7 @@ export class ClickTracker {
       return;
     }
 
-    this.analytics.track(
+    this.recorder.track(
       "Element Clicked",
       {
         element: name,

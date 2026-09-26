@@ -1,0 +1,8 @@
+{
+  "name": "analytics",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "test": "node demo/node_modules/typescript/bin/tsc -p tests/tsconfig.build.json && node --test tests/tracker-port.test.mjs tests/registry.test.mjs tests/architecture.test.mjs"
+  }
+}

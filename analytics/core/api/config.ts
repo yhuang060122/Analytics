@@ -1,9 +1,3 @@
-export interface AutoTrackOptions {
-  page?: boolean;
-  click?: boolean;
-  api?: boolean;
-}
-
 export interface DebugOptions {
   enabled?: boolean;
   inspector?: boolean;
@@ -21,7 +15,5 @@ export interface AnalyticsConfig {
 
   headers?: Record<string, string>;
 
-  autoTrack?: AutoTrackOptions;
-  
   debug?: DebugOptions;
 }

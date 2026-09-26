@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "es2022",
+    "module": "commonjs",
+    "moduleResolution": "node10",
+    "ignoreDeprecations": "6.0",
+    "lib": ["ES2023", "DOM"],
+    "strict": true,
+    "skipLibCheck": true,
+    "rootDir": "../analytics",
+    "outDir": "./.build"
+  },
+  "include": [
+    "../analytics/core/api/analytics.ts",
+    "../analytics/adapters/browser/auto-track.ts"
+  ]
+}

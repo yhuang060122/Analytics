@@ -1,4 +1,4 @@
-import { Analytics } from "../../core/api/analytics";
+import type { EventRecorder, Tracker } from "../../core/api/tracker";
 
 export interface FetchTrackerOptions {
   /**
@@ -9,18 +9,18 @@ export interface FetchTrackerOptions {
   ignoreUrls?: string[];
 }
 
-export class FetchTracker {
+export class FetchTracker implements Tracker {
   private originalFetch?: typeof window.fetch;
 
   private readonly ignoreUrls: string[];
 
-  private readonly analytics: Analytics;
+  private readonly recorder: EventRecorder;
 
   constructor(
-    analytics: Analytics,
+    recorder: EventRecorder,
     options: FetchTrackerOptions = {},
   ) {
-    this.analytics = analytics;
+    this.recorder = recorder;
     this.ignoreUrls = options.ignoreUrls ?? ["/api/analytics/events"];
   }
 
@@ -60,7 +60,7 @@ export class FetchTracker {
     try {
       const response = await this.originalFetch!(request);
 
-      this.analytics.track("API Request", {
+      this.recorder.track("API Request", {
         method,
         url: this.normalizeUrl(url),
         status: response.status,
@@ -73,7 +73,7 @@ export class FetchTracker {
 
       return response;
     } catch (error) {
-      this.analytics.track("API Error", {
+      this.recorder.track("API Error", {
         method,
         url: this.normalizeUrl(url),
         status: 0,

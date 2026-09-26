@@ -1,19 +1,27 @@
-import { Analytics } from "../../core/api/analytics";
+import type { EventRecorder, Tracker } from "../../core/api/tracker";
 
-export class PageTracker {
+export class PageTracker implements Tracker {
+
+  private readonly recorder: EventRecorder;
 
   private currentPath = window.location.pathname;
 
   private enteredAt = performance.now();
 
-  constructor(
-    private readonly analytics: Analytics
-  ) {}
+  private running = false;
+
+  constructor(recorder: EventRecorder) {
+    this.recorder = recorder;
+  }
 
   /**
    * Start browser page tracking.
    */
   start(): void {
+
+    if (this.running) return;
+
+    this.running = true;
 
     this.trackPage();
 
@@ -32,6 +40,10 @@ export class PageTracker {
   }
 
   stop(): void {
+
+    if (!this.running) return;
+
+    this.running = false;
 
     document.removeEventListener(
       "visibilitychange",
@@ -68,7 +80,7 @@ export class PageTracker {
     path: string = this.currentPath
   ): void {
 
-    this.analytics.page(
+    this.recorder.page(
       path,
       {
         title: document.title,
@@ -83,7 +95,7 @@ export class PageTracker {
       performance.now() - this.enteredAt
     );
 
-    this.analytics.track(
+    this.recorder.track(
       "Page Duration",
       {
         pagePath: this.currentPath,

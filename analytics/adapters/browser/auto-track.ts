@@ -1,59 +1,79 @@
 import { Analytics } from "../../core/api/analytics";
+import type { AnalyticsConfig } from "../../core/api/config";
+import type { EventRecorder, Tracker } from "../../core/api/tracker";
 import { ClickTracker } from "./click-tracker";
-import { PageTracker } from "./page-tracker";
 import { FetchTracker } from "./fetch-tracker";
+import { PageTracker } from "./page-tracker";
 
-import { AutoTrackOptions } from "../../core/api/config";
+export interface AutoTrackOptions {
+  page?: boolean;
+  click?: boolean;
+  api?: boolean;
+}
 
-export class AutoTrackManager {
+/**
+ * Composition helper: build the default browser probes
+ * and start them against a recorder.
+ *
+ * Who starts a tracker is decided here, not inside core.
+ */
+export function startAutoTrack(
+  recorder: EventRecorder,
+  options: AutoTrackOptions = {},
+): Tracker {
 
-  private readonly trackers: Array<{ stop(): void }> = [];
+  const trackers: Tracker[] = [];
 
-  constructor(
-    private readonly analytics: Analytics,
-    private readonly options: AutoTrackOptions = {}
-  ) {}
+  if (options.page ?? true) {
+    trackers.push(new PageTracker(recorder));
+  }
 
-  start(): void {
+  if (options.click ?? true) {
+    trackers.push(new ClickTracker(recorder));
+  }
 
-    if (this.options.page ?? true) {
+  if (options.api ?? false) {
+    trackers.push(new FetchTracker(recorder));
+  }
 
-      const tracker = new PageTracker(this.analytics);
+  trackers.forEach(tracker => tracker.start());
 
-      tracker.start();
+  return {
+    start: () => trackers.forEach(t => t.start()),
+    stop: () => trackers.forEach(t => t.stop()),
+  };
 
-      this.trackers.push(tracker);
+}
 
-    }
+export interface BrowserAnalyticsConfig
+  extends AnalyticsConfig {
+  /**
+   * Deprecated shim: `autoTrack` used to live on
+   * AnalyticsConfig. It is handled here, in the adapter
+   * layer, so core stays free of adapter knowledge.
+   */
+  autoTrack?: AutoTrackOptions;
+}
 
-    if (this.options.click ?? true) {
+/**
+ * Composition root in a box: creates the SDK and wires
+ * the browser probes. Keeps `new Analytics({ autoTrack })`
+ * working after that option moved out of core.
+ */
+export function createBrowserAnalytics(
+  config: BrowserAnalyticsConfig,
+): Analytics {
 
-      const tracker = new ClickTracker(this.analytics);
+  const analytics = new Analytics(config);
 
-      tracker.start();
+  if (config.autoTrack) {
 
-      this.trackers.push(tracker);
-
-    }
-
-    if (this.options.api ?? false) {
-
-      const tracker = new FetchTracker(this.analytics);
-
-      tracker.start();
-
-      this.trackers.push(tracker);
-
-    }
+    analytics.registerTracker(
+      startAutoTrack(analytics, config.autoTrack)
+    );
 
   }
 
-  stop(): void {
-
-    this.trackers.forEach(x => x.stop());
-
-    this.trackers.length = 0;
-
-  }
+  return analytics;
 
 }
