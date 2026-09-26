@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Watchlist · Analytics Demo</title>
+  </head>
+  <body>
+    <main class="wrap">
+
+      <header class="page-head">
+        <a class="crumb" href="/index.html">← 返回 Demo 首页</a>
+        <h1>Watchlist</h1>
+        <p class="lead">第二个页面：验证 session 与队列行为的一致性。</p>
+      </header>
+
+      <section class="card">
+        <h2>自选股</h2>
+        <div class="row">
+          <button class="btn" data-analytics="Open AAPL">Open AAPL</button>
+          <button class="btn ghost" data-analytics="Favorite AAPL">
+            Favorite AAPL
+          </button>
+        </div>
+        <div class="row">
+          <button class="btn" data-analytics="Open MSFT">Open MSFT</button>
+          <button class="btn ghost" data-analytics="Favorite MSFT">
+            Favorite MSFT
+          </button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>新闻</h2>
+        <p>加载失败也能被看到：先打开工具条里的「后端故障」再刷新。</p>
+        <div class="row">
+          <button class="btn" id="loadNews">Load News</button>
+        </div>
+        <ul class="list" id="news">
+          <li class="empty">尚未加载</li>
+        </ul>
+      </section>
+
+      <div id="devbar"></div>
+
+    </main>
+
+    <script type="module" src="/src/watchlist.ts"></script>
+  </body>
+</html>

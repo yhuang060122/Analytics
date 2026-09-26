@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Portfolio · Analytics Demo</title>
+  </head>
+  <body>
+    <main class="wrap">
+
+      <header class="page-head">
+        <a class="crumb" href="/index.html">← 返回 Demo 首页</a>
+        <h1>Portfolio</h1>
+        <p class="lead">
+          演示自动点击追踪 + FetchTracker 拦截同源 API 请求。
+        </p>
+      </header>
+
+      <section class="card">
+        <h2>NVDA</h2>
+        <div class="row">
+          <button class="btn" id="buyBtn" data-analytics="Buy NVDA">
+            Buy
+          </button>
+          <button class="btn ghost" data-analytics="Sell NVDA">
+            Sell
+          </button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>持仓</h2>
+        <p>
+          点刷新会走 <code>fetch("/api/portfolio")</code>，
+          FetchTracker 会额外上报一条 API Request。
+        </p>
+        <div class="row">
+          <button class="btn" id="refreshBtn">Refresh Portfolio</button>
+        </div>
+        <ul class="list" id="holdings">
+          <li class="empty">尚未加载</li>
+        </ul>
+      </section>
+
+      <div id="devbar"></div>
+
+    </main>
+
+    <script type="module" src="/src/portfolio.ts"></script>
+  </body>
+</html>

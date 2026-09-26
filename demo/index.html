@@ -1,13 +1,72 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>demo</title>
+    <title>Analytics SDK · Demo</title>
   </head>
   <body>
-    <div id="app"></div>
+    <main class="wrap">
+
+      <header class="page-head">
+        <h1>Analytics SDK Demo</h1>
+        <p class="lead">
+          控制台里能看到 Debug 输出的五个阶段：QUEUED → FLUSHING → SENT；
+          右下角 Inspector 面板同步显示同一条链路。
+        </p>
+      </header>
+
+      <section class="card">
+        <h2>页面跳转</h2>
+        <p>
+          PageTracker 在每个页面进入时上报一次 page 事件，
+          session 存在 sessionStorage，跨页面保持一致。
+        </p>
+        <div class="row">
+          <a class="btn" href="/portfolio.html" data-analytics="进入 Portfolio">
+            Portfolio
+          </a>
+          <a class="btn" href="/watchlist.html" data-analytics="进入 Watchlist">
+            Watchlist
+          </a>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>自动点击追踪</h2>
+        <p>
+          带 <code>data-analytics</code> 属性的元素被点击时，
+          ClickTracker 自动上报 Element Clicked。
+        </p>
+        <div class="row">
+          <button class="btn" data-analytics="主按钮 A">
+            主按钮 A
+          </button>
+          <button class="btn ghost" data-analytics="次要按钮 B">
+            次要按钮 B
+          </button>
+          <button class="btn ghost" id="counterBtn" data-analytics="计数器">
+            点击计数：0
+          </button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>手动事件</h2>
+        <p>直接调用 <code>analytics.track()</code>，可携带自定义属性。</p>
+        <div class="row">
+          <button class="btn" id="checkoutBtn">模拟下单</button>
+          <button class="btn ghost" id="burstBtn">
+            连发 10 条（看批量发送）
+          </button>
+        </div>
+      </section>
+
+      <div id="devbar"></div>
+
+    </main>
+
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
