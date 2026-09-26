@@ -1,49 +1,49 @@
-// AppConfig
+// // AppConfig
 
-import {
-  provideHttpClient,
-  withInterceptors,
-} from "@angular/common/http";
+// import {
+//   provideHttpClient,
+//   withInterceptors,
+// } from "@angular/common/http";
 
-import { provideAnalytics } from "./analytics";
+// import { provideAnalytics } from "./analytics";
 
-export const appConfig: ApplicationConfig = {
+// export const appConfig: ApplicationConfig = {
 
-  providers: [
+//   providers: [
 
-    provideAnalytics({
+//     provideAnalytics({
 
-      endpoint: "/api/analytics/events",
+//       endpoint: "/api/analytics/events",
 
-      batchSize: 20,
+//       batchSize: 20,
 
-      flushInterval: 1000,
+//       flushInterval: 1000,
 
-    }),
+//     }),
 
-    provideHttpClient(
-      withInterceptors([
-        AnalyticsHttpInterceptor,
-      ])
-    ),
+//     provideHttpClient(
+//       withInterceptors([
+//         AnalyticsHttpInterceptor,
+//       ])
+//     ),
 
-  ],
+//   ],
 
-};
+// };
 
-// AppComponent 启动 Router Tracker
+// // AppComponent 启动 Router Tracker
 
-@Component({...})
-export class AppComponent {
+// @Component({...})
+// export class AppComponent {
 
-  private readonly tracker = inject(
-    AnalyticsRouterTracker
-  );
+//   private readonly tracker = inject(
+//     AnalyticsRouterTracker
+//   );
 
-  ngOnInit(): void {
+//   ngOnInit(): void {
 
-    this.tracker.start();
+//     this.tracker.start();
 
-  }
+//   }
 
-}
+// }
