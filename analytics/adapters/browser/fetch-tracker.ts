@@ -1,10 +1,16 @@
 import type { EventRecorder, Tracker } from "../../core/api/tracker";
+import {
+  NetworkTrackerCore,
+  type NetworkTrackerOptions,
+} from "../network/network-core";
 
-export interface FetchTrackerOptions {
+export interface FetchTrackerOptions extends NetworkTrackerOptions {
   /**
    * URLs that should not be tracked.
    * Example:
-   * ["/api/analytics/events"]
+   * ["/internal/health"]
+   *
+   * Merged with the built-in ignore list, never replaces it.
    */
   ignoreUrls?: string[];
 }
@@ -12,16 +18,16 @@ export interface FetchTrackerOptions {
 export class FetchTracker implements Tracker {
   private originalFetch?: typeof window.fetch;
 
-  private readonly ignoreUrls: string[];
-
-  private readonly recorder: EventRecorder;
+  private readonly core: NetworkTrackerCore;
 
   constructor(
     recorder: EventRecorder,
     options: FetchTrackerOptions = {},
   ) {
-    this.recorder = recorder;
-    this.ignoreUrls = options.ignoreUrls ?? ["/api/analytics/events"];
+    this.core = new NetworkTrackerCore(recorder, {
+      transport: "fetch",
+      ...options,
+    });
   }
 
   start(): void {
@@ -50,7 +56,7 @@ export class FetchTracker implements Tracker {
 
     const url = request.url;
 
-    if (this.shouldIgnore(url)) {
+    if (this.core.shouldIgnore(url)) {
       return this.originalFetch!(request);
     }
 
@@ -60,47 +66,23 @@ export class FetchTracker implements Tracker {
     try {
       const response = await this.originalFetch!(request);
 
-      this.recorder.track("API Request", {
+      this.core.record({
         method,
-        url: this.normalizeUrl(url),
+        url,
         status: response.status,
-        durationMs: Math.round(performance.now() - started),
-
-        pagePath: window.location.pathname,
-        pageUrl: window.location.href,
-        pageTitle: document.title,
+        durationMs: performance.now() - started,
       });
 
       return response;
     } catch (error) {
-      this.recorder.track("API Error", {
+      this.core.recordError({
         method,
-        url: this.normalizeUrl(url),
+        url,
         status: 0,
-        durationMs: Math.round(performance.now() - started),
-
-        pagePath: window.location.pathname,
-        pageUrl: window.location.href,
-        pageTitle: document.title,
+        durationMs: performance.now() - started,
       });
 
       throw error;
     }
   };
-
-  private shouldIgnore(url: string): boolean {
-    return this.ignoreUrls.some((x) => url.includes(x));
-  }
-
-  /**
-   * Convert absolute URL into relative path.
-   */
-  private normalizeUrl(url: string): string {
-    try {
-      const u = new URL(url);
-      return u.pathname + u.search;
-    } catch {
-      return url;
-    }
-  }
 }
