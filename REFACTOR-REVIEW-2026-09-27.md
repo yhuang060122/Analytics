@@ -242,3 +242,32 @@ probe.track(name, props)
 
 验证：86 个用例 **82 pass / 0 fail / 4 todo**；demo 严格 tsc 0 错；
 `npm --prefix build run build` 两个产物均可产出（`outDir` 仍是 `../dist`）。
+
+---
+
+## 10. P0 执行情况（同日晚，一次提交）
+
+四条都是"SDK 不让宿主页面崩、不让数据静默丢"的底线，逐条落地并把 §9 里
+那 4 条 `todo` 用例全部转绿（`node --test` 现在 94 pass / 0 fail / 0 todo）。
+
+| 项 | 做了什么 |
+|---|---|
+| #1 crypto / storage 未保护 | 新增 **`core/domain/id.ts`** 的 `createId()`：`crypto.randomUUID` → `crypto.getRandomValues`（自己盖 v4 的 version/variant 位）→ `Math.random`。三条分支产出同一个形状（v4 字符串），下游无法分辨，也不会多一个分支判断。`Session` 的读写全部包 try/catch，失败后**闩锁**（不再每事件都去碰一个会抛的 API）并降级到**内存会话**（同一页面内 id 稳定）。最后在 `Analytics.track/page` 加 `record()` 边界：任何漏出来的异常都吞掉并 warn once —— `track()` 是在宿主的 click handler 里被调用的，那里抛异常等于把点击连带炸掉 |
+| #2 插件异常冒泡 | `DebugEventBus.emit` 逐 listener try/catch。失败计数进 WeakMap，成功清零；连续 3 次失败才 unsubscribe。额外给 `subscribe()` 加了 `onDrop` 回调 —— bus 摘掉监听器后必须通知 owner，否则 `DebugController.debugPlugins` 会继续宣告一个收不到事件的插件，这比原 bug 更难查 |
+| #3 无请求超时 | `HttpDestination` 加 `AbortController` + 可配 `timeoutMs`（默认 10s，`0` 关闭）。超时即一次失败尝试，计入队列的重试预算；debug 事件打 `reason: "timeout"`，与 `transport-error` 区分（前者是对方没回，后者是被拒绝，处置不同） |
+| #4 keepalive 无条件开启 | `Destination.send(events, options?)` 接受 per-call 的 `keepalive`；只有 tab-hidden / `beforeunload` 那次 flush 会置上（经 `EventQueue.flush(options)` → `drain` 透传）。超过 ~60KB 的 body 自动降级关掉 —— Chrome 是直接拒绝，带着 flag 重试只会一直失败 |
+
+### 两个值得记下的判断
+
+- **为什么没用 `sendBeacon`**：它返回 true 只表示"已交给浏览器"，不代表送达，
+  而队列的重试逻辑完全依赖"成功/失败"这个区分。unload 场景宁可用 keepalive +
+  明确的失败语义。已写进 README。
+- **为什么超时按失败而不是按成功**：计入重试预算才有意义，否则弱网下超时会
+  变成静默丢事件的另一种形式。
+
+### 测试桩的又一个盲点
+
+第一版那个"永不返回"的假 fetch 写成 `() => new Promise(() => {})`——**完全忽略
+`signal`**，于是 AbortController 再正确也不会中止任何东西，超时用例直接超时失败。
+桩必须模拟"真的会响应 abort 的 fetch"：监听 `signal` 的 abort 事件并 reject。
+这条和 §8、§9 那两次同源：**桩比被测系统更宽容时，红灯会指向错误的方向**。

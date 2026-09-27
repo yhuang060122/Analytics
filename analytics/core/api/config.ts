@@ -33,6 +33,13 @@ export interface AnalyticsConfig {
    */
   maxQueueSize?: number;
 
+  /**
+   * How long a request may be in flight before it is aborted
+   * and treated as a failed attempt. Defaults to 10s; `0`
+   * disables it. See `HttpDestinationOptions.timeoutMs`.
+   */
+  timeoutMs?: number;
+
   apiKey?: string;
 
   headers?: Record<string, string>;

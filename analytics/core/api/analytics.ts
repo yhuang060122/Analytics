@@ -1,8 +1,10 @@
 import { DebugController } from "../debug/debug-controller";
 import { hasDom } from "../dom";
 import { EventFactory } from "../factory";
-import { EventQueue } from "../queue";
+import { EventQueue, type FlushOptions } from "../queue";
 import { HttpDestination } from "../transport";
+import { warnOnce } from "../warn";
+import type { AnalyticsContext } from "../domain";
 import type { AnalyticsConfig } from "./config";
 import type { EventRecorder, Tracker } from "./tracker";
 
@@ -22,13 +24,16 @@ export class Analytics implements EventRecorder {
    * every tab switch.
    */
   private readonly handleVisibility = (): void => {
-    if (document.visibilityState === "hidden") {
-      void this.flush();
-    }
+    if (document.visibilityState !== "hidden") return;
+
+    // Hidden usually means the page is cached or about to be
+    // discarded: the batch has one shot, so it asks to be
+    // allowed to outlive the document.
+    void this.flush({ keepalive: true });
   };
 
   private readonly handleUnload = (): void => {
-    void this.flush();
+    void this.flush({ keepalive: true });
   };
 
   constructor(config: AnalyticsConfig) {
@@ -39,6 +44,7 @@ export class Analytics implements EventRecorder {
         endpoint: config.endpoint,
         apiKey: config.apiKey,
         headers: config.headers,
+        timeoutMs: config.timeoutMs,
       },
       this.debug
     );
@@ -144,16 +150,43 @@ export class Analytics implements EventRecorder {
 
   }
 
+  /**
+   * Build the context and hand it to the queue, without ever
+   * letting a failure reach the caller.
+   *
+   * `track()` is called from inside the host app's own click
+   * handlers. Anything that can throw in there — no `crypto`,
+   * no `location`, a queue that refuses the event — would take
+   * the click down with it, so the worst case is a dropped
+   * event and one warning.
+   */
+  private record(
+    build: () => AnalyticsContext,
+  ): void {
+
+    if (this.destroyed) return;
+
+    try {
+
+      this.queue.enqueue(build());
+
+    } catch (error) {
+
+      warnOnce(
+        "record-failed",
+        "could not record an event; it was dropped. " +
+          `The host app was not affected (${String(error)})`,
+      );
+
+    }
+  }
+
   track(
     name: string,
     properties: Record<string, unknown> = {}
   ): void {
 
-    if (this.destroyed) return;
-
-    const context = this.factory.track(name, properties);
-
-    this.queue.enqueue(context);
+    this.record(() => this.factory.track(name, properties));
 
   }
 
@@ -162,16 +195,19 @@ export class Analytics implements EventRecorder {
     properties: Record<string, unknown> = {}
   ): void {
 
-    if (this.destroyed) return;
-
-    const context = this.factory.page(path, properties);
-
-    this.queue.enqueue(context);
+    this.record(() => this.factory.page(path, properties));
 
   }
 
-  flush(): Promise<void> {
-    return this.queue.flush();
+  /**
+   * Ship what is buffered.
+   *
+   * `keepalive` is for the last request of the page — see
+   * `FlushOptions`. If a flush is already running this returns
+   * that one instead, and its keepalive setting wins.
+   */
+  flush(options?: FlushOptions): Promise<void> {
+    return this.queue.flush(options);
   }
 
   clear(): void {

@@ -341,6 +341,16 @@ instance.
 `stop()`/`destroy()`; patch after other libraries that wrap
 fetch, or they will capture each other.
 
+**No crypto, no storage.** `crypto.randomUUID` exists only in a
+secure context, so plain-http intranet pages and sandboxed iframes
+have none — and private mode can refuse `sessionStorage` outright.
+Reading either unguarded threw out of `init()` before the host app
+had done anything wrong. Now `core/domain/id.ts` falls through
+`crypto.getRandomValues` to `Math.random` (same v4 shape on every
+branch), `Session` keeps the id in memory when storage refuses it,
+and `track()` / `page()` swallow whatever is left after warning once.
+An event may be dropped; the page keeps working.
+
 **Personal data in clicks.** `Element Clicked` reports
 `element`, `tag`, `id` and `cssClass`, but **not** the element's
 text — `text` is `null` unless the element also carries
@@ -385,6 +395,7 @@ track() → queued → flushing ──ok──▶ removed
 | `maxRetries` | `3` | retries before a batch is dropped |
 | `retryDelay` | `1000` | base backoff, doubling, capped at 30s |
 | `maxQueueSize` | `500` | oldest event is dropped when full |
+| `timeoutMs` | `10000` | how long a request may be in flight; `0` disables it |
 
 A failed batch is never lost to a *temporary* outage, and an
 `online` event flushes immediately instead of waiting out the
@@ -396,6 +407,23 @@ A `flush()` that finds one already running hands back that same
 promise instead of resolving at once, so `await flush()` really
 means "the buffer has been dealt with" and not "a flush has been
 scheduled". That is what makes `close()` trustworthy.
+
+**Requests that never answer.** A black-holed route or a captive
+portal leaves a request pending forever, which used to park the
+queue on a promise that would never settle — no retry, no failure,
+event loss by silence. The transport now arms an `AbortController`
+and treats `timeoutMs` as a failed attempt, so the same retry budget
+applies. Set `timeoutMs: 0` to opt out.
+
+**`keepalive` is spent on the last request only.** Browsers cap how
+much may be in flight that way at once, so spending it on ordinary
+batches is how the one request that cannot be retried loses its slot.
+Every flush therefore leaves it off except the tab-hidden /
+`beforeunload` one. Bodies over ~60KB cannot use it either — those
+are refused outright — so they go without rather than not at all.
+`navigator.sendBeacon` is deliberately not used for that last
+request: it reports success before knowing anything delivered, and
+"did it arrive?" is the one thing the queue's retry logic needs.
 
 Teardown releases everything the instance owns:
 
@@ -442,9 +470,16 @@ off(); // or: analytics.debug.unregisterDebugPlugin("datadog")
   `emit()` short-circuits before the bus.
 - A `failed` event carries `reason` next to the free-form
   `error`: `queue-overflow` (dropped before it was ever sent),
-  `undeliverable` (the SDK stopped retrying) and
-  `transport-error` (the request itself failed). Match on
-  `reason`, not on the message text.
+  `undeliverable` (the SDK stopped retrying), `transport-error`
+  (the request itself failed) and `timeout` (nothing was refused,
+  the peer never answered). Match on `reason`, not on the message
+  text.
+- **A plugin cannot break the page.** `emit()` calls each listener
+  inside its own try/catch: one throwing plugin used to propagate
+  through `DebugController` and `EventFactory` into the host app's
+  own click handler. It now warns once, and a plugin that fails
+  three times in a row is unsubscribed (and dropped from
+  `debugPlugins`) rather than called forever.
 - `analytics.debug.debugPlugins` lists the attached names.
 
 The two built-ins are plugins too, installed by name:
@@ -547,13 +582,11 @@ explicitly:
   and properties; each adapter no-ops when its framework is
   missing; `init()` is idempotent; the `network` / `frameworks`
   option matrix resolves the same way in both entry points
-- `robustness.test.mjs` — SSR construction, concurrent `flush()`
-  sharing one request, `close()` draining the buffer, and unit
-  tests for the factory / session / destination. The four cases
-  the SDK still shares with the host (no `crypto.randomUUID`,
-  disabled storage, a throwing plugin, a request that never
-  settles) are `todo` tests: they assert the target behaviour and
-  go green when that lands
+- `robustness.test.mjs` — no `crypto.randomUUID`, storage disabled
+  or absent, a throwing plugin, a request that never settles,
+  `keepalive` gating, SSR construction, concurrent `flush()`
+  sharing one request, `close()` draining the buffer, plus unit
+  tests for ids / factory / session / destination
 - `architecture.test.mjs` — asserts core never imports adapters,
   the barrel never pulls in a framework adapter, no adapter
   imports `@angular/*` or `rxjs`, every listener can be removed,

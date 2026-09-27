@@ -114,8 +114,12 @@ export class DebugController {
 
     this.unregisterDebugPlugin(plugin.name);
 
+    // If this plugin ever fails often enough for the bus to
+    // drop it, drop it here too — otherwise `debugPlugins`
+    // would keep listing a subscriber that receives nothing.
     const unsubscribe = this.bus.subscribe(
-      event => plugin.onEvent(event)
+      event => plugin.onEvent(event),
+      { onDrop: () => this.unregisterDebugPlugin(plugin.name) },
     );
 
     this.plugins.set(plugin.name, { plugin, unsubscribe });

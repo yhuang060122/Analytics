@@ -27,6 +27,17 @@ export interface EventQueueOptions {
   maxQueueSize?: number;
 }
 
+/**
+ * Options for a single flush.
+ *
+ * Only the flush that runs while the page is being unloaded (or
+ * hidden) sets this, which is why it is an argument rather than
+ * constructor state — see `Destination.send`.
+ */
+export interface FlushOptions {
+  keepalive?: boolean;
+}
+
 const DEFAULT_OPTIONS: Required<EventQueueOptions> = {
   batchSize: 20,
   flushInterval: 1000,
@@ -134,15 +145,16 @@ export class EventQueue {
    * A flush already in progress owns the buffer: a second call
    * returns that same promise instead of resolving at once, so
    * `await flush()` only settles once the buffer has actually
-   * been dealt with.
+   * been dealt with. Its options win as well — `keepalive`
+   * cannot be retro-fitted onto a request already gone.
    */
-  flush(): Promise<void> {
+  flush(options?: FlushOptions): Promise<void> {
 
     if (this.inFlight) return this.inFlight;
 
     if (this.queue.length === 0) return Promise.resolve();
 
-    const run = this.drain().finally(() => {
+    const run = this.drain(options).finally(() => {
       this.inFlight = undefined;
     });
 
@@ -152,7 +164,7 @@ export class EventQueue {
 
   }
 
-  private async drain(): Promise<void> {
+  private async drain(options?: FlushOptions): Promise<void> {
 
     this.clearTimer();
     this.clearRetryTimer();
@@ -179,7 +191,7 @@ export class EventQueue {
           })
         );
 
-        await this.destination.send(batch);
+        await this.destination.send(batch, options);
 
       } catch (caught) {
         error = caught;

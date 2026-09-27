@@ -20,11 +20,16 @@ export type PipelineStage =
  * Not "retries-exhausted": with `maxRetries: 0` the batch is
  * dropped on the first failure, so nothing was ever retried.
  * What the two have in common is that the SDK stopped trying.
+ *
+ * `timeout` is its own case rather than a `transport-error`
+ * because the fix is different: nothing was refused, the peer
+ * simply never answered.
  */
 export type DebugFailureReason =
   | "queue-overflow"
   | "undeliverable"
-  | "transport-error";
+  | "transport-error"
+  | "timeout";
 
 export interface DebugEvent {
   stage: PipelineStage;

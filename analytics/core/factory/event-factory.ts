@@ -1,3 +1,4 @@
+import { createId } from "../domain/id";
 import type {
   AnalyticsContext,
   AnalyticsEvent
@@ -23,7 +24,7 @@ export class EventFactory {
   ): AnalyticsContext {
 
     const event: AnalyticsEvent = {
-      id: crypto.randomUUID(),
+      id: createId(),
       type: "track",
       name,
       properties,
@@ -39,7 +40,7 @@ export class EventFactory {
   ): AnalyticsContext {
 
     const event: AnalyticsEvent = {
-      id: crypto.randomUUID(),
+      id: createId(),
       type: "page",
       name: path,
       properties: {

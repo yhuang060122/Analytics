@@ -8,12 +8,18 @@ const require = env.require;
 const { Analytics } = require("./.build/core/api/analytics.js");
 const { EventFactory } = require("./.build/core/factory/event-factory.js");
 const { Session } = require("./.build/core/domain/session.js");
+const { createId } = require("./.build/core/domain/id.js");
 const { HttpDestination } = require(
   "./.build/core/transport/http-destination.js",
 );
 const { DebugController } = require(
   "./.build/core/debug/debug-controller.js",
 );
+const { DebugEventBus } = require("./.build/core/debug/event-bus.js");
+
+/** v4 shape, including the version and variant nibbles. */
+const UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 /**
  * Swap a global for the duration of a test.
@@ -39,6 +45,45 @@ function swap(key, value) {
     });
 }
 
+/** Replace a global with something that records every call. */
+function capture(key, impl) {
+  let calls = null;
+
+  const restore = swap(key, (...args) => {
+    calls = args;
+    return impl(...args);
+  });
+
+  return { seen: () => calls, restore };
+}
+
+function collectWarnings() {
+  const original = console.warn;
+  const warnings = [];
+
+  console.warn = (...args) => warnings.push(args.join(" "));
+
+  return {
+    warnings,
+    restore: () => (console.warn = original),
+  };
+}
+
+/**
+ * A request that never answers — but that does honour
+ * `AbortSignal`, the way a real fetch does. Nothing ever aborts
+ * a stub simply ignoring the signal.
+ */
+function hangForever() {
+  return swap("fetch", (_url, init) =>
+    new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () =>
+        reject(Object.assign(new Error("aborted"), { name: "AbortError" })),
+      );
+    }),
+  );
+}
+
 function offlineAnalytics(overrides = {}) {
   return new Analytics({
     endpoint: "/api/analytics/events",
@@ -49,50 +94,93 @@ function offlineAnalytics(overrides = {}) {
   });
 }
 
+function context() {
+  return {
+    sessionId: "s1",
+    url: "http://x/p",
+    referrer: null,
+    userAgent: "node",
+    event: { id: "e1", type: "track", name: "Signed up" },
+  };
+}
+
 // ---------------------------------------------------------------
-// Robustness: the SDK must never break the host app
+// ids and sessions without the happy path
 //
-// The four cases below are the ones the SDK currently shares
-// with the page instead of absorbing. They are marked `todo`
-// because fixing them is the P0 round (id / session fallback,
-// bus exception isolation, request timeout); the assertions
-// describe the target behaviour, so they go green the moment
-// that lands instead of being written from scratch then.
+// Anything here used to throw straight out of init(), because
+// the very first thing the SDK does is read a session id and
+// build a page event.
 // ---------------------------------------------------------------
 
-test(
-  "no crypto.randomUUID (non-secure context) still tracks",
-  { todo: true },
-  () => {
-    Session.reset();
+test("the session id survives a reload through sessionStorage", () => {
+  Session.reset();
 
-    const restore = swap("crypto", {});
+  const first = Session.current();
 
-    try {
-      const analytics = offlineAnalytics();
+  assert.match(first.id, UUID);
 
-      assert.doesNotThrow(() => analytics.track("Signed up"));
-      assert.equal(analytics.pending, 1);
+  assert.equal(
+    globalThis.sessionStorage.getItem("analytics.session"),
+    first.id,
+  );
 
-      analytics.destroy();
-    } finally {
-      restore();
-    }
-  },
-);
+  Session.reset();
 
-test("disabled sessionStorage still tracks", { todo: true }, () => {
-  const restore = swap("sessionStorage", {
-    getItem() {
-      throw new Error("SecurityError: storage disabled");
-    },
-    setItem() {
-      throw new Error("SecurityError: storage disabled");
-    },
-    removeItem() {
-      throw new Error("SecurityError: storage disabled");
-    },
+  assert.equal(
+    globalThis.sessionStorage.getItem("analytics.session"),
+    null,
+  );
+});
+
+test("createId() keeps producing uuids as crypto disappears", () => {
+  const webcrypto = globalThis.crypto;
+
+  // 1. the real thing
+  assert.match(createId(), UUID);
+
+  // 2. no randomUUID (http sites, sandboxed iframes)
+  const noRandomUUID = swap("crypto", {
+    getRandomValues: bytes => webcrypto.getRandomValues(bytes),
   });
+
+  try {
+    const ids = new Set();
+
+    for (let i = 0; i < 20; i += 1) {
+      const id = createId();
+
+      assert.match(id, UUID, "getRandomValues branch");
+      ids.add(id);
+    }
+
+    assert.equal(ids.size, 20, "no collisions");
+  } finally {
+    noRandomUUID();
+  }
+
+  // 3. no crypto at all
+  const noCrypto = swap("crypto", undefined);
+
+  try {
+    const ids = new Set();
+
+    for (let i = 0; i < 20; i += 1) {
+      const id = createId();
+
+      assert.match(id, UUID, "Math.random branch");
+      ids.add(id);
+    }
+
+    assert.equal(ids.size, 20, "no collisions");
+  } finally {
+    noCrypto();
+  }
+});
+
+test("no crypto.randomUUID (non-secure context) still tracks", () => {
+  Session.reset();
+
+  const restore = swap("crypto", {});
 
   try {
     const analytics = offlineAnalytics();
@@ -106,8 +194,70 @@ test("disabled sessionStorage still tracks", { todo: true }, () => {
   }
 });
 
-test("a throwing debug plugin does not reach track()", { todo: true }, () => {
+test("disabled sessionStorage still tracks, once warned", () => {
+  const restore = swap("sessionStorage", {
+    getItem() {
+      throw new Error("SecurityError: storage disabled");
+    },
+    setItem() {
+      throw new Error("SecurityError: storage disabled");
+    },
+    removeItem() {
+      throw new Error("SecurityError: storage disabled");
+    },
+  });
+
+  const logged = collectWarnings();
+
+  try {
+    const analytics = offlineAnalytics();
+
+    analytics.track("Signed up");
+    analytics.track("Signed up again");
+
+    assert.equal(analytics.pending, 2);
+
+    const relevant = logged.warnings.filter(w =>
+      w.includes("sessionStorage"),
+    );
+
+    assert.equal(relevant.length, 1, "warn once, not per event");
+
+    analytics.destroy();
+  } finally {
+    logged.restore();
+    restore();
+  }
+});
+
+test("the session falls back to memory instead of throwing", () => {
+  const restore = swap("sessionStorage", undefined);
+
+  try {
+    Session.reset();
+
+    const first = Session.current();
+
+    // Stable for the page, which is the point: without this the
+    // SDK would mint a new session id per event.
+    assert.equal(Session.current().id, first.id);
+
+    Session.reset();
+
+    assert.notEqual(Session.current().id, first.id);
+  } finally {
+    restore();
+  }
+});
+
+// ---------------------------------------------------------------
+// debug plugins must not be able to break the host app
+// ---------------------------------------------------------------
+
+test("a throwing debug plugin does not reach track()", () => {
   const analytics = offlineAnalytics({ debug: { enabled: true } });
+
+  const healthy = [];
 
   analytics.debug.registerDebugPlugin({
     name: "boom",
@@ -116,23 +266,87 @@ test("a throwing debug plugin does not reach track()", { todo: true }, () => {
     },
   });
 
+  analytics.debug.registerDebugPlugin({
+    name: "healthy",
+    onEvent: event => healthy.push(event.stage),
+  });
+
   assert.doesNotThrow(() => analytics.track("Signed up"));
   assert.equal(analytics.pending, 1);
+
+  assert.ok(
+    healthy.includes("created"),
+    "one broken observer must not silence the others",
+  );
 
   analytics.destroy();
 });
 
-test("a request that never settles does not hang flush()", { todo: true }, async () => {
-  const restore = swap("fetch", () => new Promise(() => undefined));
+test("a plugin that fails every time is eventually retired", () => {
+  const analytics = offlineAnalytics({ debug: { enabled: true } });
+
+  const healthy = [];
+
+  analytics.debug.registerDebugPlugin({
+    name: "healthy",
+    onEvent: event => healthy.push(event.stage),
+  });
+
+  analytics.debug.registerDebugPlugin({
+    name: "terminal",
+    onEvent() {
+      throw new Error("always");
+    },
+  });
+
+  for (let i = 0; i < 6; i += 1) analytics.track("Signed up");
+
+  assert.ok(
+    !analytics.debug.debugPlugins.includes("terminal"),
+    "a listener that fails every time is unsubscribed",
+  );
+
+  assert.ok(
+    analytics.debug.debugPlugins.includes("healthy"),
+    "an innocent plugin is never collateral damage",
+  );
+
+  analytics.destroy();
+});
+
+test("one failure does not retire a plugin", () => {
+  const bus = new DebugEventBus();
+
+  let calls = 0;
+
+  bus.subscribe(() => {
+    calls += 1;
+    if (calls === 1) throw new Error("transient");
+  });
+
+  assert.doesNotThrow(() => {
+    bus.emit({ stage: "created" });
+    bus.emit({ stage: "created" });
+  });
+
+  assert.equal(calls, 2, "the listener is still subscribed");
+});
+
+// ---------------------------------------------------------------
+// requests
+// ---------------------------------------------------------------
+
+test("a request that never settles times out instead of hanging", async () => {
+  const restore = hangForever();
 
   try {
-    const analytics = offlineAnalytics();
+    const analytics = offlineAnalytics({ timeoutMs: 50 });
 
     analytics.track("Signed up");
 
     const outcome = await Promise.race([
       analytics.flush().then(() => "settled"),
-      sleep(300).then(() => "hanging"),
+      sleep(1000).then(() => "hanging"),
     ]);
 
     assert.equal(outcome, "settled", "flush() must time out, not hang");
@@ -140,6 +354,102 @@ test("a request that never settles does not hang flush()", { todo: true }, async
     analytics.destroy();
   } finally {
     restore();
+  }
+});
+
+test("a timeout is reported as a timeout, not a transport error", async () => {
+  const restore = hangForever();
+
+  try {
+    const debug = new DebugController();
+
+    const events = [];
+
+    debug.registerDebugPlugin({
+      name: "watcher",
+      onEvent: event => events.push(event),
+    });
+
+    debug.enable();
+
+    const destination = new HttpDestination(
+      { endpoint: "/api/analytics/events", timeoutMs: 30 },
+      debug,
+    );
+
+    await assert.rejects(
+      () => destination.send([context()]),
+      /no response after 30 ms/,
+    );
+
+    const [failure] = events;
+
+    assert.equal(failure.stage, "failed");
+    assert.equal(failure.reason, "timeout");
+  } finally {
+    restore();
+  }
+});
+
+test("keepalive is reserved for the unload flush", async () => {
+  env.reset();
+
+  const seen = capture("fetch", async () => ({ ok: true, status: 200 }));
+
+  try {
+    const analytics = offlineAnalytics();
+
+    analytics.track("Signed up");
+    await analytics.flush();
+
+    assert.equal(
+      seen.seen()[1].keepalive,
+      false,
+      "an ordinary batch must not spend the keepalive budget",
+    );
+
+    analytics.track("Signed up again");
+
+    // Page is going away: this is the one request that cannot
+    // be retried, so it asks to outlive the document.
+    env.fire("win", "beforeunload");
+    await analytics.flush();
+
+    assert.equal(seen.seen()[1].keepalive, true);
+
+    analytics.destroy();
+  } finally {
+    seen.restore();
+  }
+});
+
+test("an oversized body goes without keepalive", async () => {
+  const seen = capture("fetch", async () => ({ ok: true, status: 200 }));
+
+  try {
+    const destination = new HttpDestination(
+      { endpoint: "/api/analytics/events" },
+      new DebugController(),
+    );
+
+    const huge = context();
+
+    huge.event = {
+      id: "e1",
+      type: "track",
+      name: "Huge",
+      properties: { blob: "x".repeat(70_000) },
+    };
+
+    await destination.send([huge], { keepalive: true });
+
+    assert.equal(
+      seen.seen()[1].keepalive,
+      false,
+      "chrome refuses these outright; asking anyway only loses the batch",
+    );
+  } finally {
+    seen.restore();
   }
 });
 
@@ -232,18 +542,22 @@ test("close() resolves with nothing left buffered", async () => {
 test("track() builds the whole context, not just the event", () => {
   const factory = new EventFactory(new DebugController());
 
-  const context = factory.track("Signed up", { plan: "pro" });
+  const one = factory.track("Signed up", { plan: "pro" });
 
-  assert.equal(context.event.type, "track");
-  assert.equal(context.event.name, "Signed up");
-  assert.deepEqual(context.event.properties, { plan: "pro" });
-  assert.match(context.event.id, /^[0-9a-f-]{36}$/);
-  assert.ok(!Number.isNaN(Date.parse(context.event.timestamp)));
+  assert.equal(one.event.type, "track");
+  assert.equal(one.event.name, "Signed up");
+  assert.deepEqual(one.event.properties, { plan: "pro" });
+  assert.match(one.event.id, UUID);
+  assert.ok(!Number.isNaN(Date.parse(one.event.timestamp)));
 
-  assert.equal(context.url, "http://x/p");
-  assert.equal(context.referrer, null);
-  assert.equal(context.userAgent, "node");
-  assert.ok(context.sessionId);
+  assert.equal(one.url, "http://x/p");
+  assert.equal(one.referrer, null);
+  assert.equal(one.userAgent, "node");
+  assert.ok(one.sessionId);
+
+  // Every event gets its own id, which is how a retrying queue
+  // can be de-duplicated downstream.
+  assert.notEqual(factory.track("Signed up").event.id, one.event.id);
 });
 
 test("page() defaults to the current page and lets callers override", () => {
@@ -285,12 +599,7 @@ test("the session id is stable across reads until reset", () => {
 // ---------------------------------------------------------------
 
 test("HttpDestination posts one batch with the configured headers", async () => {
-  let seen = null;
-
-  const restore = swap("fetch", async (url, init) => {
-    seen = { url, init };
-    return { ok: true, status: 200 };
-  });
+  const seen = capture("fetch", async () => ({ ok: true, status: 200 }));
 
   try {
     const debug = new DebugController();
@@ -313,33 +622,29 @@ test("HttpDestination posts one batch with the configured headers", async () => 
 
     debug.enable();
 
-    const context = {
-      sessionId: "s1",
-      url: "http://x/p",
-      referrer: null,
-      userAgent: "node",
-      event: { id: "e1", type: "track", name: "Signed up" },
-    };
+    const payload = context();
 
     // An empty batch is a no-op, not an empty POST.
     await destination.send([]);
-    assert.equal(seen, null);
+    assert.equal(seen.seen(), null);
 
-    await destination.send([context]);
+    await destination.send([payload]);
 
-    assert.equal(seen.url, "/api/analytics/events");
-    assert.equal(seen.init.method, "POST");
-    assert.equal(seen.init.keepalive, true);
-    assert.deepEqual(seen.init.headers, {
+    const [url, init] = seen.seen();
+
+    assert.equal(url, "/api/analytics/events");
+    assert.equal(init.method, "POST");
+    assert.equal(init.keepalive, false);
+    assert.deepEqual(init.headers, {
       "Content-Type": "application/json",
       "X-API-Key": "key-1",
       "X-Tenant": "acme",
     });
-    assert.deepEqual(JSON.parse(seen.init.body), { events: [context] });
+    assert.deepEqual(JSON.parse(init.body), { events: [payload] });
 
     assert.deepEqual(sent.map(e => e.stage), ["sent"]);
   } finally {
-    restore();
+    seen.restore();
   }
 });
 
@@ -363,16 +668,8 @@ test("a rejected request is reported as a transport error", async () => {
 
     debug.enable();
 
-    const context = {
-      sessionId: "s1",
-      url: "http://x/p",
-      referrer: null,
-      userAgent: "node",
-      event: { id: "e1", type: "track", name: "Signed up" },
-    };
-
     await assert.rejects(
-      () => destination.send([context]),
+      () => destination.send([context()]),
       /HTTP 500/,
       "the queue needs the rejection to keep the batch buffered",
     );
