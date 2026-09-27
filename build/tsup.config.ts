@@ -19,9 +19,11 @@ import { defineConfig } from "tsup";
  *                           installs itself.
  *
  * The ESM bundle is the barrel rather than a slimmer
- * composition-root entry on purpose: `init()` has to be
- * reachable from `import { init } from "analytics"`, which is
- * what package.json exports `.` to.
+ * composition-root entry on purpose: the barrel is the
+ * library's public surface, `init()` included. The IIFE
+ * entry is the one place allowed to install by itself;
+ * importing the ESM one must stay a decision the caller
+ * makes.
  */
 const shared = {
   // There is no root tsconfig for tsup to inherit a target
@@ -44,17 +46,17 @@ const shared = {
   /**
    * Both bundles are `.js`. Left to its defaults tsup would
    * emit analytics.mjs and analytics.iife.global.js, because
-   * this package.json declares no `type` — the extension says
-   * nothing about the module system, the export map does.
+   * nothing here declares `type: module` — the extension says
+   * nothing about the module system, the file's contents do.
    */
   outExtension: () => ({ js: ".js" }),
 
   /**
-   * No .d.ts: types still come from the TypeScript sources
-   * this package ships (see the exports map; the demo builds
-   * from source). Emitting declarations would need the
-   * typescript in demo/ (or this one) at the root, which is
-   * what keeping the build in build/ avoids.
+   * No .d.ts: consumers get their types from the TypeScript
+   * sources they import, the way the demo does. Emitting
+   * declarations would need the typescript in demo/ (or this
+   * one) at the root, which is what keeping the build in
+   * build/ avoids.
    */
   dts: false,
 

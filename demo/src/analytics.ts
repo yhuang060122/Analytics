@@ -8,9 +8,10 @@ import { init } from "../../analytics/adapters";
  * runtime supports. Calling it twice returns the same
  * instance, so a second entry point cannot double events.
  *
- * Imports the adapter entry directly, not the package
- * barrel — the barrel is for published packages with
- * subpath exports, this demo builds from source.
+ * Imports the adapter entry, not the root barrel: the
+ * barrel is the surface the ESM build is made from, and
+ * everything this file needs lives in the entry that owns
+ * `init()`.
  */
 export const analytics = init({
   endpoint: "/api/analytics/events",

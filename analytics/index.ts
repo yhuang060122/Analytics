@@ -1,13 +1,13 @@
 /**
- * Public barrel.
+ * Public barrel, and the entry the ESM build is made from.
  *
  * Framework adapters are NOT re-exported here on purpose.
- * `import "analytics"` must not pull Angular or jQuery into
- * a project that has neither, so they live behind subpath
- * exports:
+ * Importing this must not pull Angular or jQuery into a
+ * project that has neither, so they are reached by their own
+ * path instead:
  *
- *   import { JQueryAjaxTracker } from "analytics/adapters/jquery";
- *   import { createAnalyticsInterceptor } from "analytics/adapters/angular";
+ *   import { JQueryAjaxTracker } from "./adapters/jquery";
+ *   import { createAnalyticsInterceptor } from "./adapters/angular";
  */
 export * from "./core/api";
 export * from "./core/debug";

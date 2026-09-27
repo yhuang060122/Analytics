@@ -415,7 +415,7 @@ test("the script-tag entry stays out of the library", () => {
   assert.deepEqual(
     offenders,
     [],
-    "only tsup.config.ts may point at the IIFE entry",
+    "only build/tsup.config.ts may point at the IIFE entry",
   );
 
   // Everything it needs already lives in the composition
@@ -430,36 +430,42 @@ test("the script-tag entry stays out of the library", () => {
   );
 });
 
-test("the root installs nothing", () => {
-  // Two dependency islands, both deliberate: demo/ owns the
-  // toolchain the editor and vite need, build/ owns the
-  // bundler. The library itself and its tests install
-  // nothing — `npm test` even reaches for demo's typescript.
-  // A third place to install would be a third thing to
-  // forget before any of this runs.
-  const pkg = JSON.parse(
-    readFileSync(join(root, "package.json"), "utf8"),
+test("only the two islands install anything", () => {
+  // There is no package.json at the root at all: it used to
+  // hold nothing but scripts and an exports map nobody
+  // consumed, and its mere presence invited dependencies
+  // back in. demo/ owns the toolchain, build/ owns the
+  // bundler, tests/ owns the test script and installs
+  // nothing — it reaches for demo's typescript.
+  assert.equal(
+    existsSync(join(root, "package.json")),
+    false,
+    "the root is a directory of sources, not a package",
   );
+
+  ["demo", "build", "tests"].forEach((island) => {
+    assert.ok(
+      existsSync(join(root, island, "package.json")),
+      `${island}/ must own its own package.json`,
+    );
+  });
 
   const declared = [
     "dependencies",
     "devDependencies",
     "peerDependencies",
     "optionalDependencies",
-  ].filter((field) => pkg[field]);
+  ].filter((field) =>
+    JSON.parse(
+      readFileSync(join(root, "tests", "package.json"), "utf8"),
+    )[field],
+  );
 
   assert.deepEqual(
     declared,
     [],
-    "dependencies belong in demo/ or build/, never at the root",
+    "running the tests must not require an install of its own",
   );
-
-  ["demo", "build"].forEach((island) => {
-    assert.ok(
-      existsSync(join(root, island, "package.json")),
-      `${island}/ must own its own package.json`,
-    );
-  });
 });
 
 test("npm test runs every test file", () => {
@@ -467,7 +473,7 @@ test("npm test runs every test file", () => {
   // globs), so a new file is silently skipped unless it gets
   // added there too.
   const testScript = JSON.parse(
-    readFileSync(join(root, "package.json"), "utf8"),
+    readFileSync(join(root, "tests", "package.json"), "utf8"),
   ).scripts.test;
 
   const files = readdirSync(join(root, "tests")).filter((name) =>

@@ -263,22 +263,27 @@ stored, which is how a script-tag install reaches Angular:
 withInterceptors([createAnalyticsInterceptor()]);
 ```
 
-## Exports
+## Entry points
 
-The barrel never pulls in a framework adapter, so
-`import "analytics"` is safe everywhere:
+The barrel never pulls in a framework adapter, so importing the
+root is safe everywhere:
 
 ```
-analytics                  core + browser + network + init + detect
-analytics/adapters         init, getAnalytics, reset,
-                           registerFetchAdapter, registerDetectedAdapters
-analytics/adapters/network NetworkTrackerCore, active recorder
-analytics/adapters/jquery  JQueryAjaxTracker
-analytics/adapters/angular createAnalyticsInterceptor (fn + class)
+analytics/index.ts           core + browser + network + init + detect
+analytics/adapters/index.ts  init, getAnalytics, reset,
+                             registerFetchAdapter, registerDetectedAdapters
+analytics/adapters/network/  NetworkTrackerCore, active recorder
+analytics/adapters/jquery/   JQueryAjaxTracker
+analytics/adapters/angular/  createAnalyticsInterceptor (fn + class)
 ```
 
-The last two are subpath exports on purpose: this is what keeps
-Angular out of a jQuery bundle.
+The last two are reached by their own path on purpose: that is
+what keeps Angular out of a jQuery bundle, since importing the
+root never sees them.
+
+Samples in this README write imports as `analytics/…` for
+brevity. There is no package to install, so point them at
+wherever you keep the sources — the demo uses a relative path.
 
 ## Boundary cases
 
@@ -405,16 +410,17 @@ Because the inspector's lifetime is its plugin's lifetime,
 ## Build
 
 ```
-npm --prefix build install   # once
-npm run build
+npm --prefix build install        # once
+npm --prefix build run build
 ```
 
-The root installs nothing — it only forwards: `npm run build`
-is `npm --prefix build run build`. `build/` has its own
-package.json and holds tsup, typescript and rollup, the same
-way `demo/` holds vite and the typescript the tests use. Three
-islands, three lockfiles, and no `npm install` at the root that
-nobody remembers running.
+There is no `package.json` at the root: the repository is a
+directory of sources, not a package. What needs installing
+lives in its own directory with its own lockfile — `demo/`
+holds vite and the typescript the tests use, `build/` holds
+tsup and the bundler, `tests/` holds the test script and
+installs nothing at all. Nothing to install at the root means
+nothing to forget at the root.
 
 Inside `build/tsup.config.ts`: two entries, two formats, same
 sources:
@@ -424,26 +430,25 @@ sources:
 | `dist/analytics.js` | ESM, the barrel | `<script type="module">`, a bundler |
 | `dist/analytics.iife.js` | IIFE, self-installing | `<script src="…">` |
 
-The extension carries no module-system meaning here: this
-package declares no `type`, so Node would read `analytics.js`
-as CommonJS and fail on `export`. It is a browser artefact, not
-a published entry point — `import "analytics"` still resolves to
-the TypeScript sources through the exports map.
+The extension carries no module-system meaning here: nothing
+declares `type: module`, so Node would read `analytics.js` as
+CommonJS and fail on `export`. It is a browser artefact, not an
+entry point anything resolves — consumers import the TypeScript
+sources directly.
 
 One rule goes with those two entries: nothing in `analytics/`
 imports `iife.ts`. It is reachable only through
 `build/tsup.config.ts`, because reaching it through the barrel
-would mean every `import "analytics"` installs the SDK with
-whatever options the page happens to have set. The architecture
-test asserts both halves — and that the root keeps declaring no
-dependencies at all.
+would mean importing the library installs the SDK with whatever
+options the page happens to have set. The architecture test
+asserts that, and that the root stays a directory of sources.
 
 Deliberately left out of the build:
 
-- **`.d.ts`** — types come from the TypeScript sources this
-  package ships; the exports map still points at them and the
-  demo builds from source. Emitting declarations would pull
-  typescript out of the islands it currently lives in.
+- **`.d.ts`** — consumers get types from the TypeScript sources
+  they import; the demo builds from source too. Emitting
+  declarations would pull typescript out of the islands it
+  currently lives in.
 - **minification** — the files are read by humans debugging a
   tracking issue on a page they do not control.
 - **`clean`** — the two configs are built in parallel, so
@@ -461,10 +466,13 @@ other platforms.
 ## Tests
 
 ```
-npm test
+npm --prefix tests run test
 ```
 
-Compiles core + adapters with tsc, then runs `node --test tests/`:
+No install needed — the script reaches for the typescript in
+`demo/`. It compiles core + adapters with tsc into
+`tests/.build`, then runs `node --test` over the files it lists
+explicitly:
 
 - `tracker-port.test.mjs` — probes driven by a bare
   `EventRecorder`, no `Analytics` instance needed
@@ -482,8 +490,9 @@ Compiles core + adapters with tsc, then runs `node --test tests/`:
 - `architecture.test.mjs` — asserts core never imports adapters,
   the barrel never pulls in a framework adapter, no adapter
   imports `@angular/*` or `rxjs`, every listener can be removed,
-  the script-tag entry stays out of the library, and `npm test`
-  actually runs every `*.test.mjs`
+  the script-tag entry stays out of the library, the root owns
+  no package.json, and the test script actually runs every
+  `*.test.mjs``
 
 ## TODO
 

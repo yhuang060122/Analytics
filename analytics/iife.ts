@@ -6,11 +6,11 @@
  * `dist/analytics.iife.js` and nothing imports it — least of
  * all the public barrel, which stays side-effect free.
  *
- * That asymmetry is the whole design: a bundler gets
- * `import { init } from "analytics"` and decides when (and
- * whether) tracking starts. A script tag cannot pass
- * arguments, so this file does the deciding instead and
- * reads its configuration from a global:
+ * That asymmetry is the whole design: whoever imports the
+ * library decides when (and whether) tracking starts. A
+ * script tag cannot pass arguments, so this file does the
+ * deciding instead and reads its configuration from a
+ * global:
  *
  *   <script>
  *     window.analyticsOptions = { endpoint: "/api/analytics/events" };
