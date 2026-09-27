@@ -97,10 +97,6 @@ export class EventQueue {
     return this.queue.length;
   }
 
-  get pending(): readonly AnalyticsContext[] {
-    return [...this.queue];
-  }
-
   private scheduleFlush(): void {
 
     if (this.timer) return;

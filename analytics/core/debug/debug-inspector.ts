@@ -2,14 +2,7 @@
 
 import { DebugEventBus } from "./event-bus";
 import type { DebugEvent } from "./debug-event";
-
-const STAGE_COLORS: Record<string, string> = {
-  created: "#64748B",
-  queued: "#F59E0B",
-  flushing: "#3B82F6",
-  sent: "#22C55E",
-  failed: "#EF4444",
-};
+import { STAGE_COLORS } from "./stage-colors";
 
 export class DebugInspector {
 
@@ -248,7 +241,7 @@ export class DebugInspector {
 
     const stage = document.createElement("span");
     stage.textContent = event.stage.toUpperCase();
-    stage.style.color = STAGE_COLORS[event.stage] ?? "#9CA3AF";
+    stage.style.color = STAGE_COLORS[event.stage];
 
     top.appendChild(name);
     top.appendChild(stage);

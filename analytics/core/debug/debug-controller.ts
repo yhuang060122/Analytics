@@ -3,6 +3,7 @@
 import { DebugEventBus } from "./event-bus";
 import { DebugInspector } from "./debug-inspector";
 import type { DebugEvent } from "./debug-event";
+import { STAGE_COLORS } from "./stage-colors";
 
 export interface DebugOptions {
   enabled?: boolean;
@@ -67,17 +68,9 @@ export class DebugController {
 
     this.consoleUnsubscribe = this.bus.subscribe(event => {
 
-      const color = {
-        created: "#64748B",
-        queued: "#F59E0B",
-        flushing: "#3B82F6",
-        sent: "#22C55E",
-        failed: "#EF4444",
-      }[event.stage];
-
       console.log(
         `%c${event.stage.toUpperCase()}`,
-        `color:${color};font-weight:bold`,
+        `color:${STAGE_COLORS[event.stage]};font-weight:bold`,
         event.context.event.name,
         event.context.event.properties
       );

@@ -134,6 +134,32 @@ test("network core stays framework-agnostic", () => {
   );
 });
 
+test("shared types and constants are declared once", () => {
+  const shared = ["DebugOptions", "STAGE_COLORS"];
+
+  const files = walk(join(root, "analytics")).filter((file) =>
+    file.endsWith(".ts"),
+  );
+
+  shared.forEach((name) => {
+    // A re-export (`export type { X }`) is not a declaration.
+    const pattern = new RegExp(
+      `^\\s*(?:export\\s+)?(?:interface|type|const)\\s+${name}\\b`,
+      "m",
+    );
+
+    const declaredIn = files.filter((file) =>
+      pattern.test(readFileSync(file, "utf8")),
+    );
+
+    assert.equal(
+      declaredIn.length,
+      1,
+      `${name} must have a single declaration, found ${declaredIn.length}`,
+    );
+  });
+});
+
 test("Analytics exposes the registry API", () => {
   const source = readFileSync(
     join(root, "analytics", "core", "api", "analytics.ts"),

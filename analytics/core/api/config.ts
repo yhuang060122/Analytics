@@ -1,8 +1,11 @@
-export interface DebugOptions {
-  enabled?: boolean;
-  inspector?: boolean;
-  console?: boolean;
-}
+import type { DebugOptions } from "../debug/debug-controller";
+
+/**
+ * Re-exported so `import type { DebugOptions } from "analytics"`
+ * keeps working. The definition lives next to the class that
+ * consumes it — it used to be duplicated here.
+ */
+export type { DebugOptions };
 
 export interface AnalyticsConfig {
   endpoint: string;
