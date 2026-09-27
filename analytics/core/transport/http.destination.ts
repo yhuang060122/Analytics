@@ -10,10 +10,17 @@ export interface HttpDestinationOptions {
 
 export class HttpDestination implements Destination {
 
+  private readonly options: HttpDestinationOptions;
+
+  private readonly debug: DebugController;
+
   constructor(
-    private readonly options: HttpDestinationOptions,
-    private readonly debug: DebugController
-  ) {}
+    options: HttpDestinationOptions,
+    debug: DebugController
+  ) {
+    this.options = options;
+    this.debug = debug;
+  }
 
   async send(
     events: readonly AnalyticsContext[]

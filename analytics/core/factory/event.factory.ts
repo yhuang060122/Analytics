@@ -1,16 +1,21 @@
-import {
+import type {
   AnalyticsContext,
-  AnalyticsEvent,
-  Session
+  AnalyticsEvent
 } from "../domain";
 
-import { DebugController } from "../debug/debug-controller";
+import { Session } from "../domain";
+
+import type { DebugController } from "../debug/debug-controller";
 
 export class EventFactory {
 
+  private readonly debug: DebugController;
+
   constructor(
-    private readonly debug: DebugController
-  ) {}
+    debug: DebugController
+  ) {
+    this.debug = debug;
+  }
 
   track(
     name: string,

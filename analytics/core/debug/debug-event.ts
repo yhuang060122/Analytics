@@ -1,4 +1,4 @@
-import { AnalyticsContext } from "../domain/context";
+import type { AnalyticsContext } from "../domain/context";
 
 export type PipelineStage =
   | "created"

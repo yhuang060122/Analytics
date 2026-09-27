@@ -310,6 +310,48 @@ test("built-in debug sinks live in their own modules", () => {
   );
 });
 
+test("types are imported with import type", () => {
+  // The SDK builds to CommonJS, so `verbatimModuleSyntax` (which
+  // would catch this at compile time) cannot be enabled here —
+  // hence this guard. The demo's tsconfig does enable it, and
+  // these imports used to be its only remaining errors.
+  // DebugController is deliberately absent: the composition
+  // root constructs it, so it is a real value import there.
+  const typeOnlyNames = [
+    "AnalyticsContext",
+    "AnalyticsEvent",
+    "DebugEvent",
+    "DebugOptions",
+    "DebugPlugin",
+    "Destination",
+    "EventRecorder",
+    "PipelineStage",
+    "Tracker",
+  ];
+
+  const files = walk(join(root, "analytics")).filter((file) =>
+    file.endsWith(".ts"),
+  );
+
+  const offenders = files.flatMap((file) =>
+    // `import {` only: `import type {` does not match.
+    [...codeOf(file).matchAll(/import\s*\{([^}]*)\}\s*from/g)].flatMap(
+      (match) =>
+        match[1]
+          .split(",")
+          .map((name) => name.trim().replace(/^type\s+/, ""))
+          .filter((name) => typeOnlyNames.includes(name))
+          .map((name) => `${file} → ${name}`),
+    ),
+  );
+
+  assert.deepEqual(
+    offenders,
+    [],
+    "a type-only import emits nothing at runtime; importing it as a value breaks bundlers that enforce verbatimModuleSyntax",
+  );
+});
+
 test("npm test runs every test file", () => {
   // The script lists files explicitly (cmd.exe does not expand
   // globs), so a new file is silently skipped unless it gets

@@ -7,6 +7,14 @@
     "lib": ["ES2023", "DOM"],
     "strict": true,
     "skipLibCheck": true,
+
+    /* Bans constructor parameter properties, enums and
+       namespaces — none of which the bundler can erase.
+       `verbatimModuleSyntax` cannot go here: the SDK is built
+       to CommonJS, and ESM syntax in a CJS file is TS1295.
+       Type-only imports are guarded by architecture.test.mjs
+       instead ("types are imported with import type"). */
+    "erasableSyntaxOnly": true,
     "rootDir": "../analytics",
     "outDir": "./.build"
   },

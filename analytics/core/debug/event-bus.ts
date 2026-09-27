@@ -1,4 +1,4 @@
-import { DebugEvent } from "./debug-event";
+import type { DebugEvent } from "./debug-event";
 
 type Listener = (event: DebugEvent) => void;
 
