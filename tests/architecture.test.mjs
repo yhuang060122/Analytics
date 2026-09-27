@@ -220,3 +220,52 @@ test("Analytics exposes the registry API", () => {
   assert.match(source, /implements EventRecorder/);
   assert.doesNotMatch(source, /new AutoTrackManager\(/);
 });
+
+test("every listener the SDK registers can be removed again", () => {
+  // Anonymous listeners were the reason a destroyed instance
+  // kept flushing on every tab switch: there was no handle to
+  // hand to removeEventListener.
+  const sources = walk(join(root, "analytics", "core")).filter((file) =>
+    file.endsWith(".ts"),
+  );
+
+  sources.forEach((file) => {
+    const source = codeOf(file);
+
+    const added = [...source.matchAll(
+      /addEventListener\(\s*(\n\s*)?["']([^"']+)["']/g,
+    )].map((match) => match[2]);
+
+    const removed = [...source.matchAll(
+      /removeEventListener\(\s*(\n\s*)?["']([^"']+)["']/g,
+    )].map((match) => match[2]);
+
+    added.forEach((type) => {
+      assert.ok(
+        removed.includes(type),
+        `${file} registers "${type}" but never removes it`,
+      );
+    });
+  });
+});
+
+test("npm test runs every test file", () => {
+  // The script lists files explicitly (cmd.exe does not expand
+  // globs), so a new file is silently skipped unless it gets
+  // added there too.
+  const testScript = JSON.parse(
+    readFileSync(join(root, "package.json"), "utf8"),
+  ).scripts.test;
+
+  const files = readdirSync(join(root, "tests")).filter((name) =>
+    name.endsWith(".test.mjs"),
+  );
+
+  const missing = files.filter((name) => !testScript.includes(name));
+
+  assert.deepEqual(
+    missing,
+    [],
+    `add ${missing.join(", ")} to the test script, or it never runs`,
+  );
+});

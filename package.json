@@ -11,6 +11,6 @@
     "./adapters/angular": "./analytics/adapters/angular/index.ts"
   },
   "scripts": {
-    "test": "node demo/node_modules/typescript/bin/tsc -p tests/tsconfig.build.json && node --test tests/tracker-port.test.mjs tests/registry.test.mjs tests/architecture.test.mjs tests/network.test.mjs"
+    "test": "node demo/node_modules/typescript/bin/tsc -p tests/tsconfig.build.json && node --test tests/tracker-port.test.mjs tests/registry.test.mjs tests/queue.test.mjs tests/architecture.test.mjs tests/network.test.mjs"
   }
 }

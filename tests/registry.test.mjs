@@ -74,6 +74,7 @@ test("startAutoTrack wires probes and destroy() tears them down", () => {
     click: env.count("doc", "click"),
     vis: env.count("doc", "visibilitychange"),
     unload: env.count("win", "beforeunload"),
+    online: env.count("win", "online"),
   };
 
   analytics.registerTracker(
@@ -88,11 +89,35 @@ test("startAutoTrack wires probes and destroy() tears them down", () => {
 
   assert.equal(env.count("doc", "click"), 0);
 
-  // Known gap (out of scope here): Analytics.removeLifecycle
-  // does not exist yet, so its own two listeners survive
-  // destroy(). Flip these to 0 once that lands.
-  assert.equal(env.count("doc", "visibilitychange"), before.vis);
-  assert.equal(env.count("win", "beforeunload"), before.unload);
+  // Analytics' own lifecycle listeners and the queue's
+  // "online" listener are named fields, so destroy() can
+  // remove them — nothing survives the teardown.
+  assert.equal(env.count("doc", "visibilitychange"), 0);
+  assert.equal(env.count("win", "beforeunload"), 0);
+  assert.equal(env.count("win", "online"), 0);
+});
+
+test("destroy() is idempotent and silences the instance", () => {
+  env.reset();
+
+  const analytics = new Analytics(config);
+  analytics.registerTracker(
+    startAutoTrack(analytics, { page: false, click: true, api: false }),
+  );
+
+  analytics.destroy();
+  analytics.destroy();
+
+  assert.equal(analytics.isDestroyed, true);
+  assert.equal(env.count("doc", "click"), 0);
+
+  // Recording after teardown must not resurrect the pipeline.
+  analytics.track("Ghost Event");
+  assert.equal(analytics.pending, 0);
+
+  // A hidden-tab flush after teardown does nothing either.
+  env.fire("doc", "visibilitychange", {});
+  assert.equal(env.batches.length, 0);
 });
 
 test("re-starting an auto-track bundle does not stack listeners", () => {

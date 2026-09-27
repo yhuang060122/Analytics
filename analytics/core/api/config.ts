@@ -14,6 +14,25 @@ export interface AnalyticsConfig {
 
   flushInterval?: number;
 
+  /**
+   * How many times a failing batch is retried before the
+   * events are dropped. Defaults to 3.
+   */
+  maxRetries?: number;
+
+  /**
+   * Base delay before the first retry, doubling each time.
+   * Defaults to 1000ms, capped at 30s.
+   */
+  retryDelay?: number;
+
+  /**
+   * Hard cap on buffered events (default 500). When full, the
+   * oldest event is dropped rather than let the buffer grow
+   * without bound during an outage.
+   */
+  maxQueueSize?: number;
+
   apiKey?: string;
 
   headers?: Record<string, string>;

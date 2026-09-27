@@ -33,7 +33,16 @@ analytics.registerTracker(
 ```
 
 `registerTracker()` only registers — starting is the caller's
-decision. `destroy()` and `unregisterTracker()` stop probes.
+decision. `destroy()` and `unregisterTracker()` stop probes;
+`await analytics.close()` is the awaitable variant. See
+[Delivery & teardown](#delivery--teardown).
+
+**Idempotent by construction.** Every probe extends
+`BaseTracker`, which owns the running flag. Subclasses implement
+`onStart()`/`onStop()` and cannot double-register their listeners
+by accident. `canStart()` is the escape hatch for a probe whose
+runtime may not exist (jQuery): `start()` then leaves it stopped
+instead of half-started.
 
 ## One API, several stacks
 
@@ -287,6 +296,48 @@ touching `document`, and jQuery/Angular adapters no-op when their
 framework is absent, so a Node render does not throw. Call
 `init()` from a browser-only entry point anyway.
 
+## Delivery & teardown
+
+The queue ships a batch only once the destination accepted it:
+
+```
+track() → queued → flushing ──ok──▶ removed
+                      │
+                      └──fail──▶ stays queued, retry with backoff
+                                  (retryDelay × 2ⁿ, capped at 30s)
+                                  after maxRetries → dropped, one
+                                  terminal "failed" debug event
+```
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `batchSize` | `20` | events per request |
+| `flushInterval` | `1000` | ms before an automatic flush |
+| `maxRetries` | `3` | retries before a batch is dropped |
+| `retryDelay` | `1000` | base backoff, doubling, capped at 30s |
+| `maxQueueSize` | `500` | oldest event is dropped when full |
+
+A failed batch is never lost to a *temporary* outage, and an
+`online` event flushes immediately instead of waiting out the
+backoff. `flush()` never rejects — every automatic caller does
+`void this.flush()`, so a rejection would surface as an unhandled
+promise rejection.
+
+Teardown releases everything the instance owns:
+
+- `destroy()` — idempotent; stops every probe, removes its own
+  `visibilitychange` / `beforeunload` listeners, stops the
+  queue's timers and `online` listener, then makes one last
+  best-effort flush.
+- `close()` — same, but awaits the flush. Use it when you need
+  to know the buffer is empty (tests, SPA unmount).
+- After either, `track()` / `page()` are no-ops and
+  `isDestroyed` is `true`.
+
+Every listener the SDK registers is a named field, so
+`architecture.test.mjs` fails if one is added without a matching
+`removeEventListener`.
+
 ## Tests
 
 ```
@@ -299,12 +350,16 @@ Compiles core + adapters with tsc, then runs `node --test tests/`:
   `EventRecorder`, no `Analytics` instance needed
 - `registry.test.mjs` — register/destroy semantics, listener
   counts, end-to-end event pipeline
+- `queue.test.mjs` — failed batch stays buffered and is retried,
+  dropped only after the retry budget, `flush()` never rejects,
+  overflow drops the oldest, teardown clears every listener
 - `network.test.mjs` — all three transports emit identical names
   and properties; each adapter no-ops when its framework is
   missing; `init()` is idempotent
 - `architecture.test.mjs` — asserts core never imports adapters,
-  the barrel never pulls in a framework adapter, and no adapter
-  imports `@angular/*` or `rxjs`
+  the barrel never pulls in a framework adapter, no adapter
+  imports `@angular/*` or `rxjs`, every listener can be removed,
+  and `npm test` actually runs every `*.test.mjs`
 
 ## TODO
 

@@ -13,6 +13,23 @@ export class Analytics implements EventRecorder {
   private readonly factory: EventFactory;
   private readonly queue: EventQueue;
 
+  private destroyed = false;
+
+  /**
+   * Named so `destroy()` can remove them. Anonymous listeners
+   * were the reason a destroyed instance kept flushing on
+   * every tab switch.
+   */
+  private readonly handleVisibility = (): void => {
+    if (document.visibilityState === "hidden") {
+      void this.flush();
+    }
+  };
+
+  private readonly handleUnload = (): void => {
+    void this.flush();
+  };
+
   constructor(config: AnalyticsConfig) {
     this.debug = new DebugController(config.debug);
 
@@ -32,6 +49,9 @@ export class Analytics implements EventRecorder {
       {
         batchSize: config.batchSize,
         flushInterval: config.flushInterval,
+        maxRetries: config.maxRetries,
+        retryDelay: config.retryDelay,
+        maxQueueSize: config.maxQueueSize,
       }
     );
 
@@ -42,10 +62,49 @@ export class Analytics implements EventRecorder {
 
   }
 
+  /**
+   * Tear everything down: probes, lifecycle listeners, timers,
+   * then one last best-effort flush.
+   *
+   * Idempotent — a second call does nothing.
+   */
   destroy(): void {
 
-    this.unregisterAll();
+    if (this.destroyed) return;
+    this.destroyed = true;
 
+    this.unregisterAll();
+    this.removeLifecycle();
+    this.queue.stop();
+
+    // Best effort: whatever is still buffered gets one final
+    // chance. The retry timer is already stopped, so this is
+    // the last attempt, not the first of a series.
+    void this.flush();
+
+  }
+
+  /**
+   * Awaitable teardown: waits for the buffered events to be
+   * shipped (or to fail) before stopping the queue. Unlike
+   * `destroy()` it does not leave a request in flight.
+   */
+  async close(): Promise<void> {
+
+    if (this.destroyed) return;
+    this.destroyed = true;
+
+    this.unregisterAll();
+    this.removeLifecycle();
+
+    await this.flush();
+
+    this.queue.stop();
+
+  }
+
+  get isDestroyed(): boolean {
+    return this.destroyed;
   }
 
   /**
@@ -84,6 +143,8 @@ export class Analytics implements EventRecorder {
     properties: Record<string, unknown> = {}
   ): void {
 
+    if (this.destroyed) return;
+
     const context = this.factory.track(name, properties);
 
     this.queue.enqueue(context);
@@ -94,6 +155,8 @@ export class Analytics implements EventRecorder {
     path?: string,
     properties: Record<string, unknown> = {}
   ): void {
+
+    if (this.destroyed) return;
 
     const context = this.factory.page(path, properties);
 
@@ -113,18 +176,34 @@ export class Analytics implements EventRecorder {
     return this.queue.size;
   }
 
+  get retrying(): boolean {
+    return this.queue.retrying;
+  }
+
   /**
    * Automatically flush when page is hidden.
    */
   private registerLifecycle(): void {
-    document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "hidden") {
-        void this.flush();
-      }
-    });
+    document.addEventListener(
+      "visibilitychange",
+      this.handleVisibility
+    );
 
-    window.addEventListener("beforeunload", () => {
-      void this.flush();
-    });
+    window.addEventListener(
+      "beforeunload",
+      this.handleUnload
+    );
+  }
+
+  private removeLifecycle(): void {
+    document.removeEventListener(
+      "visibilitychange",
+      this.handleVisibility
+    );
+
+    window.removeEventListener(
+      "beforeunload",
+      this.handleUnload
+    );
   }
 }

@@ -23,6 +23,13 @@ export class DebugInspector {
     this.bus = bus;
   }
 
+  /**
+   * Named so `stop()` can detach it. The button dies with the
+   * panel anyway, but an explicit detach keeps "every listener
+   * can be removed" true without exceptions.
+   */
+  private readonly handleToggle = (): void => this.toggle();
+
   start(): void {
 
     if (this.panel) return;
@@ -39,6 +46,8 @@ export class DebugInspector {
 
     this.unsubscribe?.();
     this.unsubscribe = undefined;
+
+    this.minimizeBtn?.removeEventListener("click", this.handleToggle);
 
     this.panel?.remove();
     this.panel = undefined;
@@ -157,7 +166,7 @@ export class DebugInspector {
 
     this.minimizeBtn.addEventListener(
       "click",
-      () => this.toggle()
+      this.handleToggle
     );
 
     header.appendChild(title);
