@@ -82,6 +82,13 @@ Every transport emits the same two event names and tags itself:
 `transport` is `fetch`, `jquery` or `angular` — filter on it
 instead of on three different event names.
 
+Those two names are **not configurable per transport**.
+`successEventName` / `errorEventName` used to exist as options:
+nothing ever set them, and their mere presence implied a
+transport may name its events differently — the one thing this
+module exists to prevent. `enrich()` went the same way; it would
+have let one stack add properties the others do not have.
+
 ### Rules the adapters follow
 
 - **No package dependency.** Neither `adapters/angular` nor

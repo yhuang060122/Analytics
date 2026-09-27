@@ -9,12 +9,16 @@ import type { EventRecorder } from "../../core/api/tracker";
  * every transport emits the same two event names and tags
  * itself, so queries can filter on `transport` instead of
  * on three different event names.
+ *
+ * Only what an adapter actually produces. `xhr` was never
+ * assigned by anything (jQuery goes through `$.ajax`, and there
+ * is no XHR adapter), so it was a union member no value could
+ * ever have.
  */
 export type NetworkTransport =
   | "fetch"
   | "jquery"
   | "angular"
-  | "xhr"
   | "unknown";
 
 export interface NetworkRecord {
@@ -24,6 +28,15 @@ export interface NetworkRecord {
   durationMs: number;
 }
 
+/**
+ * Event naming is deliberately absent here.
+ *
+ * `successEventName` / `errorEventName` used to exist, and
+ * nothing ever set them — but their presence implied that one
+ * transport may name its events differently, which is exactly
+ * what this module exists to prevent. Per-transport naming now
+ * lives nowhere; filter on `properties.transport` instead.
+ */
 export interface NetworkTrackerOptions {
   /**
    * Added to the built-in ignore list, never replaces it.
@@ -34,14 +47,8 @@ export interface NetworkTrackerOptions {
 
   transport?: NetworkTransport;
 
-  successEventName?: string;
-  errorEventName?: string;
-
   /** Override for apps using hash routing or a base href. */
   normalizeUrl?: (url: string) => string;
-
-  /** Extra properties merged into every network event. */
-  enrich?: (record: NetworkRecord) => Record<string, unknown>;
 }
 
 export const NETWORK_SUCCESS_EVENT = "API Request";
@@ -155,11 +162,11 @@ export class NetworkTrackerCore {
   }
 
   recordSuccess(record: NetworkRecord): void {
-    this.emit(this.options.successEventName ?? NETWORK_SUCCESS_EVENT, record);
+    this.emit(NETWORK_SUCCESS_EVENT, record);
   }
 
   recordError(record: NetworkRecord): void {
-    this.emit(this.options.errorEventName ?? NETWORK_ERROR_EVENT, record);
+    this.emit(NETWORK_ERROR_EVENT, record);
   }
 
   /**
@@ -167,8 +174,6 @@ export class NetworkTrackerCore {
    * keys, which is what makes one dashboard possible.
    */
   properties(record: NetworkRecord): Record<string, unknown> {
-    const extra = this.options.enrich?.(record) ?? {};
-
     return {
       method: record.method,
       url: this.normalizeUrl(record.url),
@@ -177,7 +182,6 @@ export class NetworkTrackerCore {
       transport: this.transport,
 
       ...readPageContext(),
-      ...extra,
     };
   }
 

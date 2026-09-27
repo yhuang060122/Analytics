@@ -310,6 +310,25 @@ test("built-in debug sinks live in their own modules", () => {
   );
 });
 
+test("network event names come from one place", () => {
+  // The whole point of network-core is that the three
+  // transports cannot drift apart. A literal "API Request"
+  // anywhere else is the drift starting again — use
+  // NETWORK_SUCCESS_EVENT / NETWORK_ERROR_EVENT.
+  const offenders = walk(adaptersDir)
+    .filter((file) => file.endsWith(".ts"))
+    .filter((file) => !file.endsWith(join("network", "network-core.ts")))
+    .filter((file) =>
+      /["']API (Request|Error)["']/.test(codeOf(file)),
+    );
+
+  assert.deepEqual(
+    offenders,
+    [],
+    "import the event-name constants from network-core instead of spelling them out",
+  );
+});
+
 test("types are imported with import type", () => {
   // The SDK builds to CommonJS, so `verbatimModuleSyntax` (which
   // would catch this at compile time) cannot be enabled here —
