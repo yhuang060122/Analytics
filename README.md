@@ -2,6 +2,124 @@
 
 Frontend tracking SDK. TypeScript, browser-first.
 
+The repository is a **directory of sources, not an npm package** —
+there is no `package.json` at the root. What needs installing lives
+in three self-contained islands (`demo/`, `build/`, `tests/`), each
+with its own lockfile. You import the SDK by path, not by name.
+
+---
+
+## Get started
+
+### Requirements
+
+- **Node.js ≥ 20** (developed and tested on 22.x)
+- **npm ≥ 9**
+- Nothing global to install. Each island installs its own tools.
+
+### Install
+
+```bash
+npm --prefix demo install      # vite + typescript (runs the demo, compiles the tests)
+npm --prefix build install     # tsup + typescript (builds the bundles)
+```
+
+`tests/` installs nothing — its script reaches for the TypeScript in
+`demo/node_modules`.
+
+### Run the demo
+
+```bash
+npm --prefix demo run dev
+```
+
+Open **http://localhost:5173**. It is a Vite multi-page app:
+
+| Page | What it exercises |
+| --- | --- |
+| `/` (index) | clicks, page views, the debug inspector, manual flush |
+| `/portfolio` | fetch tracking against the mock API |
+| `/watchlist` | jQuery-style requests, outage/retry behaviour |
+
+The SDK instance is shared across pages in `demo/src/analytics.ts`;
+the debug toolbar controls live in `demo/src/inspector-toolbar.ts`.
+
+The dev server ships a **mock collector** (`demo/vite.config.ts`),
+so the whole pipeline can be exercised end to end:
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /api/analytics/events` | accepts SDK batches, logs them to the terminal |
+| `GET /api/analytics/outage?state=on\|off` | simulates a 500 to exercise queue retry |
+| `GET /api/portfolio` | sample data for the portfolio page |
+| `GET /api/news` | sample data for the watchlist page |
+
+### Common commands
+
+| What | Command |
+| --- | --- |
+| Run the demo (dev server) | `npm --prefix demo run dev` |
+| Typecheck + build the demo | `npm --prefix demo run build` |
+| Build the SDK bundles | `npm --prefix build run build` |
+| Run the test suite | `npm --prefix tests run test` |
+
+- `npm --prefix tests run test` compiles `analytics/` to
+  `tests/.build` with tsc, then runs `node --test`. It is the
+  command to run after touching `core/` or `adapters/`.
+- `npm --prefix build run build` writes `dist/analytics.js` (ESM
+  barrel) and `dist/analytics.iife.js` (self-installing `<script>`
+  build). See [Build](#build).
+- `npm --prefix demo run build` runs the demo through a strict
+  TypeScript config (`noUnusedLocals`, `verbatimModuleSyntax`),
+  which is stricter than the SDK build — a good last check before
+  committing.
+
+---
+
+## Project structure
+
+```
+analytics/                  the SDK itself
+  core/                     framework-agnostic engine — never imports adapters/
+    api/                    ports & the SDK: Analytics, EventRecorder/Tracker
+                            (tracker.ts), the adapter plugin contract (plugin.ts)
+    domain/                 event / context / session / id (id.ts holds the
+                            crypto → getRandomValues → Math.random fallback)
+    factory/                EventFactory: track()/page() → AnalyticsContext
+    queue/                  EventQueue: batching, retry + backoff, overflow
+    transport/              Destination port + HttpDestination (HTTP POST,
+                            timeout + keepalive gating)
+    debug/                  DebugController, event bus, plugin registry,
+                            console + inspector built-ins
+    dom.ts                  hasDom() guard for construction-time DOM access
+    warn.ts                 warnOnce() — degrade loudly, exactly once
+  adapters/                 probes — depend inward on core/
+    browser/                click-tracker, page-tracker, fetch-tracker,
+                            auto-track.ts (startAutoTrack)
+    network/                NetworkTrackerCore (shared event names/ignore rule)
+                            + active-recorder.ts (script-tag slot)
+    jquery/                 JQueryAjaxTracker ($.ajax global events)
+    angular/                createAnalyticsInterceptor (HttpClient)
+    detect.ts               runtime feature detection
+    page-context.ts         readPageContext() — the one place the page triple comes from
+    registry.ts             name → adapter table (plugin discovery)
+    index.ts                init() — the composition root
+  index.ts                  public barrel (framework adapters NOT re-exported)
+  iife.ts                   <script> build entry — side effects, self-installs
+
+demo/                       Vite multi-page demo + mock collector
+build/                      tsup config → dist/analytics.js, dist/analytics.iife.js
+tests/                      node --test suite (zero dependencies)
+dist/                       build output (git-ignored)
+```
+
+The direction that matters: **core never imports adapters.** Adapters
+depend inward on core's ports; wiring happens only in the composition
+root (`adapters/index.ts`). `tests/architecture.test.mjs` enforces
+this and a dozen other invariants mechanically.
+
+---
+
 ## Layers
 
 ```
@@ -667,12 +785,16 @@ explicitly:
   `keepalive` gating, SSR construction, concurrent `flush()`
   sharing one request, `close()` draining the buffer, plus unit
   tests for ids / factory / session / destination
+- `adapter-plugin.test.mjs` — the plugin registry: register /
+  install / configure a third-party adapter, availability gating,
+  a throwing adapter, name replacement, integrations report
+  `manual`, `adapters.*` overriding the legacy switches
 - `architecture.test.mjs` — asserts core never imports adapters,
   the barrel never pulls in a framework adapter, no adapter
   imports `@angular/*` or `rxjs`, every listener can be removed,
   the script-tag entry stays out of the library, the root owns
   no package.json, and the test script actually runs every
-  `*.test.mjs``
+  `*.test.mjs`
 
 ## TODO
 
