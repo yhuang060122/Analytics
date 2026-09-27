@@ -1,4 +1,5 @@
-import type { EventRecorder, Tracker } from "../../core/api/tracker";
+import { BaseTracker } from "../../core/api/tracker";
+import type { EventRecorder } from "../../core/api/tracker";
 
 export interface ClickTrackerOptions {
   /**
@@ -8,25 +9,22 @@ export interface ClickTrackerOptions {
   attribute?: string;
 }
 
-export class ClickTracker implements Tracker {
+export class ClickTracker extends BaseTracker {
 
   private readonly recorder: EventRecorder;
   private readonly attribute: string;
-  private running = false;
 
   constructor(
     recorder: EventRecorder,
     options: ClickTrackerOptions = {}
   ) {
+    super();
+
     this.recorder = recorder;
     this.attribute = options.attribute ?? "data-analytics";
   }
 
-  start(): void {
-
-    if (this.running) return;
-
-    this.running = true;
+  protected onStart(): void {
 
     document.addEventListener(
       "click",
@@ -36,11 +34,7 @@ export class ClickTracker implements Tracker {
 
   }
 
-  stop(): void {
-
-    if (!this.running) return;
-
-    this.running = false;
+  protected onStop(): void {
 
     document.removeEventListener(
       "click",

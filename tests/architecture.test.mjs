@@ -134,6 +134,55 @@ test("network core stays framework-agnostic", () => {
   );
 });
 
+test("transport never depends on queue", () => {
+  const transportDir = join(root, "analytics", "core", "transport");
+
+  const offenders = walk(transportDir)
+    .filter((file) => file.endsWith(".ts"))
+    .flatMap((file) =>
+      importsOf(file)
+        .filter((specifier) => specifier.includes("queue"))
+        .map((specifier) => `${file} → ${specifier}`),
+    );
+
+  assert.deepEqual(
+    offenders,
+    [],
+    "queue drains through a Destination, so queue -> transport; the reverse drags EventQueue into the transport layer",
+  );
+});
+
+test("every probe inherits BaseTracker instead of hand-rolling it", () => {
+  const probes = [
+    "browser/click-tracker.ts",
+    "browser/page-tracker.ts",
+    "browser/fetch-tracker.ts",
+    "jquery/jquery-ajax-tracker.ts",
+  ];
+
+  probes.forEach((name) => {
+    const source = readFileSync(join(adaptersDir, name), "utf8");
+
+    assert.match(
+      source,
+      /extends BaseTracker/,
+      `${name} must extend BaseTracker`,
+    );
+
+    assert.doesNotMatch(
+      source,
+      /private running/,
+      `${name} must not manage the running flag itself`,
+    );
+
+    assert.doesNotMatch(
+      source,
+      /\bstart\(\): void/,
+      `${name} must implement onStart(), not start()`,
+    );
+  });
+});
+
 test("shared types and constants are declared once", () => {
   const shared = ["DebugOptions", "STAGE_COLORS"];
 

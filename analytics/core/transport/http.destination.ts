@@ -1,6 +1,6 @@
-import { AnalyticsContext } from "../domain";
-import { DebugController } from "../debug/debug-controller";
-import { Destination } from "../queue";
+import type { AnalyticsContext } from "../domain";
+import type { DebugController } from "../debug/debug-controller";
+import type { Destination } from "./destination";
 
 export interface HttpDestinationOptions {
   endpoint: string;

@@ -1,4 +1,5 @@
-import type { EventRecorder, Tracker } from "../../core/api/tracker";
+import { BaseTracker } from "../../core/api/tracker";
+import type { EventRecorder } from "../../core/api/tracker";
 import {
   NetworkTrackerCore,
   type NetworkTrackerOptions,
@@ -15,7 +16,7 @@ export interface FetchTrackerOptions extends NetworkTrackerOptions {
   ignoreUrls?: string[];
 }
 
-export class FetchTracker implements Tracker {
+export class FetchTracker extends BaseTracker {
   private originalFetch?: typeof window.fetch;
 
   private readonly core: NetworkTrackerCore;
@@ -24,25 +25,24 @@ export class FetchTracker implements Tracker {
     recorder: EventRecorder,
     options: FetchTrackerOptions = {},
   ) {
+    super();
+
     this.core = new NetworkTrackerCore(recorder, {
       transport: "fetch",
       ...options,
     });
   }
 
-  start(): void {
-    if (this.originalFetch) {
-      return;
-    }
-
-    // bind(): a detached window.fetch call throws
-    // "Illegal invocation" in browsers.
-    this.originalFetch = window.fetch.bind(window);
+  protected onStart(): void {
+    // Store the raw reference, not a bound copy: restoring a
+    // bound function would change window.fetch's identity,
+    // which breaks any other library that also wraps it.
+    this.originalFetch = window.fetch;
 
     window.fetch = this.interceptFetch;
   }
 
-  stop(): void {
+  protected onStop(): void {
     if (!this.originalFetch) {
       return;
     }
@@ -51,20 +51,30 @@ export class FetchTracker implements Tracker {
     this.originalFetch = undefined;
   }
 
+  /**
+   * `call(window, ...)` instead of a stored bound copy: a
+   * detached fetch throws "Illegal invocation" in browsers.
+   */
+  private callOriginal(
+    request: Request,
+  ): ReturnType<typeof window.fetch> {
+    return this.originalFetch!.call(window, request);
+  }
+
   private interceptFetch: typeof window.fetch = async (input, init) => {
     const request = input instanceof Request ? input : new Request(input, init);
 
     const url = request.url;
 
     if (this.core.shouldIgnore(url)) {
-      return this.originalFetch!(request);
+      return this.callOriginal(request);
     }
 
     const method = request.method;
     const started = performance.now();
 
     try {
-      const response = await this.originalFetch!(request);
+      const response = await this.callOriginal(request);
 
       this.core.record({
         method,

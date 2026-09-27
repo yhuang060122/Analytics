@@ -86,6 +86,11 @@ instead of on three different event names.
 - **Never break the host.** `start()` no-ops when the framework
   is missing, and every observation is wrapped so a tracking
   failure cannot fail an HTTP request.
+- **Idempotent by construction.** Probes extend `BaseTracker`
+  and implement `onStart()` / `onStop()`; the `running` flag
+  lives in the base class, so a probe cannot forget the guard
+  and double-register its listeners. `canStart()` is the hook
+  for probes whose runtime may not exist.
 
 ## Entry point
 

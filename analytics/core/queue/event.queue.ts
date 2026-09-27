@@ -1,6 +1,6 @@
-import { AnalyticsContext } from "../domain";
-import { DebugController } from "../debug/debug-controller";
-import { Destination } from "./destination";
+import type { AnalyticsContext } from "../domain";
+import type { DebugController } from "../debug/debug-controller";
+import type { Destination } from "../transport/destination";
 
 export interface EventQueueOptions {
   batchSize?: number;

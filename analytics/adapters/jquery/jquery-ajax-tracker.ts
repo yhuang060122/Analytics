@@ -1,6 +1,7 @@
 // adapters/jquery/jquery-ajax-tracker.ts
 
-import type { EventRecorder, Tracker } from "../../core/api/tracker";
+import { BaseTracker } from "../../core/api/tracker";
+import type { EventRecorder } from "../../core/api/tracker";
 import type {
   JQueryCollectionLike,
   JQueryLike,
@@ -39,10 +40,8 @@ type AjaxHandler = (
  * without jQuery and no @types/jquery is forced onto
  * consumers.
  */
-export class JQueryAjaxTracker implements Tracker {
+export class JQueryAjaxTracker extends BaseTracker {
   private readonly core: NetworkTrackerCore;
-
-  private running = false;
 
   private jq?: JQueryLike;
 
@@ -52,6 +51,8 @@ export class JQueryAjaxTracker implements Tracker {
     recorder: EventRecorder,
     options: NetworkTrackerOptions = {},
   ) {
+    super();
+
     this.core = new NetworkTrackerCore(recorder, {
       transport: "jquery",
       ...options,
@@ -64,20 +65,23 @@ export class JQueryAjaxTracker implements Tracker {
   }
 
   /**
-   * Enable automatic tracking of every $.ajax call.
-   *
-   * No-ops rather than throws when jQuery is absent: a
-   * tracking probe must never break the host page.
+   * A missing jQuery leaves the tracker stopped rather than
+   * half-started, so a later `start()` still works if jQuery
+   * is loaded afterwards.
    */
-  start(): void {
-    if (this.running) return;
+  protected canStart(): boolean {
+    return this.available;
+  }
 
+  /**
+   * Enable automatic tracking of every $.ajax call.
+   */
+  protected onStart(): void {
     const jq = getJQuery();
 
     if (!jq) return;
 
     this.jq = jq;
-    this.running = true;
 
     const onSend: AjaxHandler = (_event, jqXHR) => {
       (jqXHR as unknown as Record<string, unknown>)[START_TIME] =
@@ -105,11 +109,7 @@ export class JQueryAjaxTracker implements Tracker {
     );
   }
 
-  stop(): void {
-    if (!this.running) return;
-
-    this.running = false;
-
+  protected onStop(): void {
     const doc = this.collection();
 
     this.handlers.forEach(([event, handler]) => {

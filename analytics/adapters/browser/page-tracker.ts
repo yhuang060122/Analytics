@@ -1,6 +1,7 @@
-import type { EventRecorder, Tracker } from "../../core/api/tracker";
+import { BaseTracker } from "../../core/api/tracker";
+import type { EventRecorder } from "../../core/api/tracker";
 
-export class PageTracker implements Tracker {
+export class PageTracker extends BaseTracker {
 
   private readonly recorder: EventRecorder;
 
@@ -8,20 +9,16 @@ export class PageTracker implements Tracker {
 
   private enteredAt = performance.now();
 
-  private running = false;
-
   constructor(recorder: EventRecorder) {
+    super();
+
     this.recorder = recorder;
   }
 
   /**
    * Start browser page tracking.
    */
-  start(): void {
-
-    if (this.running) return;
-
-    this.running = true;
+  protected onStart(): void {
 
     this.trackPage();
 
@@ -39,11 +36,7 @@ export class PageTracker implements Tracker {
 
   }
 
-  stop(): void {
-
-    if (!this.running) return;
-
-    this.running = false;
+  protected onStop(): void {
 
     document.removeEventListener(
       "visibilitychange",
