@@ -117,6 +117,32 @@ const report = await registerDetectedAdapters(analytics);
 `angular: "manual"` is not a gap: an HTTP interceptor cannot
 attach itself to `HttpClient`, the app must provide it.
 
+With no arguments it inherits the options `init()` was called
+with, so `init({ network: false })` is not silently undone by a
+later `registerDetectedAdapters()`. Explicit arguments win over
+that fallback. Every value is `registered` / `skipped` /
+`unavailable` (and `manual` for Angular), where `skipped` means
+"present but disabled by config".
+
+If you build the SDK yourself instead of calling `init()`, the
+sync half is public too:
+
+```ts
+import { Analytics } from "analytics";
+import { registerFetchAdapter } from "analytics/adapters";
+
+const analytics = new Analytics({ endpoint: "/api/analytics/events" });
+
+registerFetchAdapter(analytics, { ignoreUrls: ["/health"] });
+// false when window.fetch does not exist (SSR, old browser)
+```
+
+It is idempotent by design: network adapters patch globals, and
+a second FetchTracker would capture the already-patched fetch as
+its "original", so one request would emit two `API Request`
+events. `registerFetchAdapter` and `registerDetectedAdapters`
+both refuse to stack.
+
 ### Detection
 
 `detect.ts` inspects the runtime and registers only what exists:
@@ -215,7 +241,8 @@ The barrel never pulls in a framework adapter, so
 
 ```
 analytics                  core + browser + network + init + detect
-analytics/adapters         init, getAnalytics, registerDetectedAdapters
+analytics/adapters         init, getAnalytics, reset,
+                           registerFetchAdapter, registerDetectedAdapters
 analytics/adapters/network NetworkTrackerCore, active recorder
 analytics/adapters/jquery  JQueryAjaxTracker
 analytics/adapters/angular createAnalyticsInterceptor (fn + class)

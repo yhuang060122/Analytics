@@ -7,8 +7,15 @@ import {
   createBrowserAnalytics,
   type BrowserAnalyticsConfig,
 } from "./browser/auto-track";
-import { isAngularAvailable, isJQueryAvailable } from "./detect";
-import { setActiveRecorder } from "./network/active-recorder";
+import {
+  isAngularAvailable,
+  isFetchAvailable,
+  isJQueryAvailable,
+} from "./detect";
+import {
+  clearActiveRecorder,
+  setActiveRecorder,
+} from "./network/active-recorder";
 import type { NetworkTrackerOptions } from "./network/network-core";
 
 export interface NetworkInitOptions extends NetworkTrackerOptions {
@@ -33,6 +40,7 @@ export interface FrameworkOptions {
 
   /** Force-enable or disable a framework adapter. */
   frameworks?: {
+    fetch?: boolean;
     jquery?: boolean;
     angular?: boolean;
   };
@@ -65,6 +73,26 @@ export interface AdapterReport {
 let instance: Analytics | undefined;
 
 /**
+ * Which network adapters are live right now.
+ *
+ * Needed because these adapters patch globals. Registering a
+ * second FetchTracker would capture the *already patched*
+ * fetch as its "original", so one request would emit two
+ * `API Request` events. The bookkeeping makes every register
+ * call idempotent instead.
+ */
+const live: { fetch?: Tracker; jquery?: Tracker } = {};
+
+/**
+ * The framework options `init()` was called with.
+ *
+ * So `registerDetectedAdapters()` with no arguments finishes
+ * what init would have done, instead of silently ignoring
+ * `network: false` and re-enabling everything.
+ */
+let lastOptions: FrameworkOptions = {};
+
+/**
  * Composition root. Creates the SDK, starts what the current
  * runtime actually supports, and ignores the rest.
  *
@@ -82,9 +110,21 @@ export function init(options: InitOptions): Analytics {
     ...options,
   };
 
+  lastOptions = {
+    network: options.network,
+    frameworks: options.frameworks,
+  };
+
   const analytics = createBrowserAnalytics(config);
 
-  applyNetworkOptions(analytics, options);
+  const network = options.network === false ? undefined : options.network;
+
+  if ((options.frameworks?.fetch ?? true) && options.network !== false) {
+    registerFetchAdapter(
+      analytics,
+      network?.fetch === false ? undefined : network,
+    );
+  }
 
   setActiveRecorder(analytics);
 
@@ -107,6 +147,40 @@ export function getAnalytics(): Analytics | undefined {
 export function reset(): void {
   instance?.destroy();
   instance = undefined;
+
+  live.fetch = undefined;
+  live.jquery = undefined;
+
+  clearActiveRecorder();
+}
+
+/**
+ * Detect and register the fetch adapter. Public, idempotent.
+ *
+ * Returns false when there is no `window.fetch` to patch
+ * (SSR, very old browser) — callers can treat that as "this
+ * runtime cannot track network calls".
+ *
+ * `init()` already calls it; use it directly only when you
+ * build the SDK yourself with `new Analytics(...)` and still
+ * want the detection behaviour.
+ */
+export function registerFetchAdapter(
+  analytics: Analytics,
+  options?: NetworkTrackerOptions,
+): boolean {
+  if (live.fetch) return true;
+
+  if (!isFetchAvailable()) return false;
+
+  const tracker = new FetchTracker(analytics, options ?? {});
+
+  tracker.start();
+  analytics.registerTracker(tracker);
+
+  live.fetch = tracker;
+
+  return true;
 }
 
 /**
@@ -127,52 +201,52 @@ export async function registerDetectedAdapters(
     angular: "unavailable",
   };
 
-  const network = options.network === false ? undefined : options.network;
-  const wanted = options.frameworks?.jquery ?? true;
+  // Explicit arguments win, init()'s config is the fallback.
+  const merged: FrameworkOptions = {
+    ...lastOptions,
+    ...options,
+  };
 
-  if (wanted && isJQueryAvailable()) {
+  const network = merged.network === false ? undefined : merged.network;
+
+  // ---- fetch ----
+  const wantsFetch =
+    merged.frameworks?.fetch ?? (network?.fetch ?? true);
+
+  if (merged.network === false || !wantsFetch) {
+    report.fetch = isFetchAvailable() ? "skipped" : "unavailable";
+  } else {
+    report.fetch = registerFetchAdapter(analytics, network)
+      ? "registered"
+      : "unavailable";
+  }
+
+  // ---- jQuery ----
+  const wantsJquery = merged.frameworks?.jquery ?? true;
+
+  if (live.jquery) {
+    report.jquery = "registered";
+  } else if (!wantsJquery || merged.network === false) {
+    report.jquery = isJQueryAvailable() ? "skipped" : "unavailable";
+  } else if (isJQueryAvailable()) {
     const { JQueryAjaxTracker } = await import("./jquery/index");
 
-    const tracker: Tracker = new JQueryAjaxTracker(
-      analytics,
-      network ?? {},
-    );
+    const tracker: Tracker = new JQueryAjaxTracker(analytics, network ?? {});
 
     tracker.start();
     analytics.registerTracker(tracker);
 
+    live.jquery = tracker;
+
     report.jquery = "registered";
-  } else if (isJQueryAvailable()) {
-    report.jquery = "skipped";
   }
 
+  // ---- Angular ----
   if (isAngularAvailable()) {
     report.angular = "manual";
   }
 
   return report;
-}
-
-function applyNetworkOptions(
-  analytics: Analytics,
-  options: InitOptions,
-): void {
-  const network = options.network;
-
-  if (network === false) return;
-
-  const wantsFetch = network?.fetch ?? true;
-
-  if (!wantsFetch) return;
-
-  if (typeof window === "undefined" || typeof window.fetch !== "function") {
-    return;
-  }
-
-  const tracker = new FetchTracker(analytics, network ?? {});
-
-  tracker.start();
-  analytics.registerTracker(tracker);
 }
 
 /**

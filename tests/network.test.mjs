@@ -16,8 +16,16 @@ const { JQueryAjaxTracker } = require(
 );
 const { createAnalyticsInterceptor, createAnalyticsHttpInterceptor } =
   require("./.build/adapters/angular/index.js");
-const { init, getAnalytics, reset, registerDetectedAdapters } = require(
-  "./.build/adapters/index.js",
+const {
+  init,
+  getAnalytics,
+  reset,
+  registerDetectedAdapters,
+  registerFetchAdapter,
+} = require("./.build/adapters/index.js");
+const { Analytics } = require("./.build/core/api/analytics.js");
+const { getActiveRecorder } = require(
+  "./.build/adapters/network/active-recorder.js",
 );
 
 function fakeRecorder() {
@@ -326,31 +334,134 @@ test("init() is idempotent and registers fetch", async () => {
   reset();
 });
 
+test("registerFetchAdapter is idempotent: one request, one event", async () => {
+  reset();
+  env.reset();
+
+  let originalCalls = 0;
+
+  globalThis.window.fetch = async () => {
+    originalCalls += 1;
+    return { ok: true, status: 200 };
+  };
+
+  const analytics = new Analytics({
+    endpoint: "/api/analytics/events",
+    batchSize: 100,
+    flushInterval: 100000,
+  });
+
+  assert.equal(registerFetchAdapter(analytics), true);
+
+  const patched = globalThis.window.fetch;
+
+  assert.equal(registerFetchAdapter(analytics), true);
+
+  assert.equal(
+    globalThis.window.fetch,
+    patched,
+    "a second call must not patch twice",
+  );
+
+  await globalThis.window.fetch("http://x/api/users");
+
+  assert.equal(originalCalls, 1);
+  assert.equal(
+    analytics.pending,
+    1,
+    "patching twice would emit two events per request",
+  );
+
+  analytics.destroy();
+  reset();
+});
+
+test("registerDetectedAdapters reports what actually got registered", async () => {
+  reset();
+  env.reset();
+
+  globalThis.window.fetch = globalThis.fetch;
+
+  const on = init({ endpoint: "/api/analytics/events" });
+  const onReport = await registerDetectedAdapters(on);
+
+  assert.equal(onReport.fetch, "registered");
+  assert.equal(onReport.jquery, "unavailable");
+
+  reset();
+  env.reset();
+
+  const off = init({
+    endpoint: "/api/analytics/events",
+    network: false,
+  });
+
+  const offReport = await registerDetectedAdapters(off);
+
+  assert.equal(offReport.fetch, "skipped");
+
+  off.destroy();
+  reset();
+});
+
+test("reset() forgets the active recorder", () => {
+  reset();
+
+  globalThis.window.fetch = globalThis.fetch;
+
+  const analytics = init({ endpoint: "/api/analytics/events" });
+
+  assert.equal(getActiveRecorder(), analytics);
+
+  reset();
+
+  assert.equal(
+    getActiveRecorder(),
+    undefined,
+    "a destroyed instance must not stay reachable",
+  );
+});
+
 test("registerDetectedAdapters wires jQuery only when present", async () => {
   reset();
   env.reset();
 
   globalThis.window.fetch = globalThis.fetch;
 
-  const analytics = init({
+  const off = init({
     endpoint: "/api/analytics/events",
     network: false,
   });
 
-  const absent = await registerDetectedAdapters(analytics, {});
+  const absent = await registerDetectedAdapters(off, {});
   assert.equal(absent.jquery, "unavailable");
+
+  off.destroy();
+  reset();
 
   installFakeJQuery();
 
-  const present = await registerDetectedAdapters(analytics, {});
+  const on = init({ endpoint: "/api/analytics/events" });
+
+  const present = await registerDetectedAdapters(on, {});
   assert.equal(present.jquery, "registered");
 
-  const forcedOff = await registerDetectedAdapters(analytics, {
+  // A second call cannot stack a second jQuery adapter.
+  const again = await registerDetectedAdapters(on, {});
+  assert.equal(again.jquery, "registered");
+
+  on.destroy();
+  reset();
+
+  const gated = init({
+    endpoint: "/api/analytics/events",
     frameworks: { jquery: false },
   });
+
+  const forcedOff = await registerDetectedAdapters(gated, {});
   assert.equal(forcedOff.jquery, "skipped");
 
-  analytics.destroy();
+  gated.destroy();
   reset();
   removeJQuery();
 });
