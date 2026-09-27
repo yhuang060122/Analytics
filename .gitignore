@@ -2,3 +2,8 @@
 node_modules
 .workbuddy
 tests/.build
+dist
+
+# tsup bundles its config to evaluate it and removes the copy
+# afterwards; this is what a killed build leaves behind.
+tsup.config.bundled_*.mjs

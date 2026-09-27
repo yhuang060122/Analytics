@@ -391,6 +391,45 @@ test("types are imported with import type", () => {
   );
 });
 
+test("the script-tag entry stays out of the library", () => {
+  // iife.ts installs the SDK as a side effect. One
+  // `export * from "./iife"` in the barrel — or any adapter
+  // importing it — and every `import "analytics"` would start
+  // tracking with whatever window.analyticsOptions happens to
+  // be, which is exactly what the library build promises not
+  // to do. The two must stay wired only through the bundler.
+  const entry = join(root, "analytics", "iife.ts");
+
+  const files = walk(join(root, "analytics")).filter((file) =>
+    file.endsWith(".ts"),
+  );
+
+  const offenders = files
+    .filter((file) => file !== entry)
+    .flatMap((file) =>
+      importsOf(file)
+        .filter((specifier) => /iife/.test(specifier))
+        .map((specifier) => `${file} → ${specifier}`),
+    );
+
+  assert.deepEqual(
+    offenders,
+    [],
+    "only tsup.config.ts may point at the IIFE entry",
+  );
+
+  // Everything it needs already lives in the composition
+  // root. Importing adapters directly here would bypass the
+  // runtime detection that decides which of them may start.
+  // Deduplicated: the entry imports the module twice, once
+  // for `init` and once for the `InitOptions` type.
+  assert.deepEqual(
+    [...new Set(importsOf(entry))],
+    ["./adapters"],
+    "the entry should stay a thin wrapper over init()",
+  );
+});
+
 test("npm test runs every test file", () => {
   // The script lists files explicitly (cmd.exe does not expand
   // globs), so a new file is silently skipped unless it gets

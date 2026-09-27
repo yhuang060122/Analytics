@@ -66,6 +66,7 @@ analytics/
     detect.ts                runtime feature detection
     index.ts                 init() — the composition root
   index.ts                   public barrel
+  iife.ts                    <script> build entry — side effects
 ```
 
 Every transport emits the same two event names and tags itself:
@@ -189,17 +190,24 @@ detectEnvironment();
 
 ## jQuery project
 
-Script tag — enable by loading, no build step:
+Script tag — no bundler, no imports:
 
 ```html
 <script src="/vendor/jquery.min.js"></script>
-<script src="/analytics.js"></script>
 <script>
-  // window.analytics exists: the IIFE build calls init() itself
-  // and reads window.analyticsOptions.
+  // Read by analytics.iife.js when it installs itself.
   window.analyticsOptions = { endpoint: "/api/analytics/events" };
 </script>
+<script src="/analytics.iife.js"></script>
+<!-- window.analytics exists from here on -->
 ```
+
+That build is the only artefact that installs itself; see
+[Build](#build). It is all side effects, and it reads
+`window.analyticsOptions` once, on DOMContentLoaded — which is
+why the options may be set after the script tag. Set them from
+a deferred module instead and there is nothing to read yet:
+the build warns once and installs nothing.
 
 Order matters: **jQuery must load first.** If it does not,
 detection finds nothing, the adapter stays a no-op and the page
@@ -394,6 +402,55 @@ analytics.debug.unregisterDebugPlugin(CONSOLE_PLUGIN);
 Because the inspector's lifetime is its plugin's lifetime,
 `destroy()` removes the panel with it.
 
+## Build
+
+```
+npm run build
+```
+
+tsup, two entries, two formats, same sources (see
+`tsup.config.ts`):
+
+| File | Format | Loaded with |
+| --- | --- | --- |
+| `dist/analytics.js` | ESM, the barrel | `<script type="module">`, a bundler |
+| `dist/analytics.iife.js` | IIFE, self-installing | `<script src="…">` |
+
+The extension carries no module-system meaning here: this
+package declares no `type`, so Node would read `analytics.js`
+as CommonJS and fail on `export`. It is a browser artefact, not
+a published entry point — `import "analytics"` still resolves to
+the TypeScript sources through the exports map.
+
+One rule goes with those two entries: nothing in `analytics/`
+imports `iife.ts`. It is reachable only through
+`tsup.config.ts`, because reaching it through the barrel would
+mean every `import "analytics"` installs the SDK with whatever
+options the page happens to have set. The architecture test
+asserts both halves.
+
+Deliberately left out of the build:
+
+- **`.d.ts`** — types come from the TypeScript sources this
+  package ships; the exports map still points at them and the
+  demo builds from source. Emitting declarations would need a
+  root-level `typescript`, which deliberately lives under
+  `demo/`.
+- **minification** — the files are read by humans debugging a
+  tracking issue on a page they do not control.
+- **`clean`** — the two configs are built in parallel, so
+  whichever ran first would see its output removed by the
+  other. Both entries have fixed names, so a build overwrites
+  its own file; rename one and the old artefact is left behind
+  until the folder itself is deleted.
+
+Requires `npm install` at the root. That install carries one
+odd entry: `@rollup/rollup-win32-x64-msvc` is pinned as an
+optional dependency because npm skipped rollup's platform
+binary (npm/cli#4828), and tsup loads rollup whether or not
+declarations are emitted. npm ignores the pin on other
+platforms.
+
 ## Tests
 
 ```
@@ -418,11 +475,10 @@ Compiles core + adapters with tsc, then runs `node --test tests/`:
 - `architecture.test.mjs` — asserts core never imports adapters,
   the barrel never pulls in a framework adapter, no adapter
   imports `@angular/*` or `rxjs`, every listener can be removed,
-  and `npm test` actually runs every `*.test.mjs`
+  the script-tag entry stays out of the library, and `npm test`
+  actually runs every `*.test.mjs`
 
 ## TODO
 
-- tsup build producing `analytics.js` (ESM + IIFE); the IIFE
-  entry is what calls `init()` for the script-tag flow
 - Persistence for the queue (localStorage / IndexedDB) so events
   survive a reload
