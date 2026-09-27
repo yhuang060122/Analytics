@@ -50,25 +50,6 @@ export class PageTracker extends BaseTracker {
 
   }
 
-  /**
-   * Call this from Angular Router.
-   */
-  navigate(path: string): void {
-
-    if (path === this.currentPath) {
-      return;
-    }
-
-    this.trackDuration();
-
-    this.currentPath = path;
-
-    this.enteredAt = performance.now();
-
-    this.trackPage(path);
-
-  }
-
   private trackPage(
     path: string = this.currentPath
   ): void {

@@ -1,4 +1,5 @@
 import { DebugController } from "../debug/debug-controller";
+import { hasDom } from "../dom";
 import { EventFactory } from "../factory";
 import { EventQueue } from "../queue";
 import { HttpDestination } from "../transport";
@@ -189,6 +190,9 @@ export class Analytics implements EventRecorder {
    * Automatically flush when page is hidden.
    */
   private registerLifecycle(): void {
+
+    if (!hasDom()) return;
+
     document.addEventListener(
       "visibilitychange",
       this.handleVisibility
@@ -201,6 +205,9 @@ export class Analytics implements EventRecorder {
   }
 
   private removeLifecycle(): void {
+
+    if (!hasDom()) return;
+
     document.removeEventListener(
       "visibilitychange",
       this.handleVisibility

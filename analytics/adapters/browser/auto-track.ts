@@ -52,17 +52,24 @@ export function startAutoTrack(
 export interface BrowserAnalyticsConfig
   extends AnalyticsConfig {
   /**
-   * Deprecated shim: `autoTrack` used to live on
-   * AnalyticsConfig. It is handled here, in the adapter
-   * layer, so core stays free of adapter knowledge.
+   * Which browser probes to install.
+   *
+   * This is the real, supported switch — `init()` defaults it
+   * to `{ page: true, click: true }`. It lives here rather
+   * than on `AnalyticsConfig` because "page" and "click" are
+   * adapter concepts: core cannot name them without knowing
+   * about adapters.
    */
   autoTrack?: AutoTrackOptions;
 }
 
 /**
- * Composition root in a box: creates the SDK and wires
- * the browser probes. Keeps `new Analytics({ autoTrack })`
- * working after that option moved out of core.
+ * Composition root in a box: creates the SDK and wires the
+ * browser probes the config asked for.
+ *
+ * This is what `init()` uses, and what you want instead of
+ * `new Analytics(...)` when you still expect clicks and page
+ * views to be tracked.
  */
 export function createBrowserAnalytics(
   config: BrowserAnalyticsConfig,

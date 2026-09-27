@@ -48,11 +48,18 @@ export function installBrowser(fetchImpl) {
     const el = {
       tagName: tag.toUpperCase(),
       children: [],
-      textContent: "",
       id: "",
       style: { cssText: "" },
       appendChild(child) {
         el.children.push(child);
+        return child;
+      },
+      insertBefore(child, ref) {
+        const at = ref ? el.children.indexOf(ref) : -1;
+
+        if (at < 0) el.children.push(child);
+        else el.children.splice(at, 0, child);
+
         return child;
       },
       removeChild(child) {
@@ -67,6 +74,28 @@ export function installBrowser(fetchImpl) {
       querySelector: () => null,
       querySelectorAll: () => [],
     };
+
+    // Real DOM: assigning textContent drops every child, which
+    // is exactly how the inspector clears its list. Without it
+    // a full re-render would look like it stacked duplicates.
+    let text = "";
+
+    Object.defineProperty(el, "textContent", {
+      get: () => text,
+      set: (value) => {
+        text = value;
+        if (value === "") el.children.length = 0;
+      },
+      enumerable: true,
+    });
+
+    Object.defineProperty(el, "firstChild", {
+      get: () => el.children[0] ?? null,
+    });
+
+    Object.defineProperty(el, "lastChild", {
+      get: () => el.children[el.children.length - 1] ?? null,
+    });
 
     return el;
   };

@@ -130,10 +130,39 @@ function spy<T>(
   }
 }
 
+/**
+ * Once, not per request: the missing recorder is a wiring
+ * mistake, and a page that fires it on every HTTP call would
+ * bury the console in noise.
+ */
+let warnedAboutMissingRecorder = false;
+
+/**
+ * The recorder this interceptor reports to.
+ *
+ * Falls back to the one `init()` stored, which is how a
+ * script-tag install reaches Angular. When there is none the
+ * interceptor still works — it forwards the request untouched
+ * — but every event would go nowhere, so it says so instead
+ * of failing silently. It must not throw: an interceptor that
+ * throws at bootstrap takes the whole app down.
+ */
 function resolveRecorder(
   recorder?: EventRecorder,
 ): EventRecorder | undefined {
-  return recorder ?? getActiveRecorder();
+  const resolved = recorder ?? getActiveRecorder();
+
+  if (!resolved && !warnedAboutMissingRecorder) {
+    warnedAboutMissingRecorder = true;
+
+    console.warn(
+      "[analytics] no recorder: pass the Analytics instance to " +
+        "createAnalyticsInterceptor(analytics), or call init() " +
+        "before providing it. Events are being dropped.",
+    );
+  }
+
+  return resolved;
 }
 
 const NOOP_RECORDER: EventRecorder = {

@@ -147,6 +147,20 @@ that fallback. Every value is `registered` / `skipped` /
 `unavailable` (and `manual` for Angular), where `skipped` means
 "present but disabled by config".
 
+Two switches can turn an adapter on or off, and they resolve the
+same way in both entry points:
+
+| Config | Effect |
+| --- | --- |
+| *(absent)* | on, if the runtime has it |
+| `network: false` | network tracking off entirely |
+| `network: { fetch: false }` | that transport off |
+| `frameworks: { fetch: false }` | force off, wins over `network` |
+
+`init()` and `registerDetectedAdapters()` share one resolver, so
+`init({ network: { fetch: false } })` cannot install the adapter
+through one path and skip it through the other.
+
 If you build the SDK yourself instead of calling `init()`, the
 sync half is public too:
 
@@ -307,6 +321,21 @@ same call twice. It can report *different* calls twice if the
 app calls `$.ajax` directly inside Angular — filter on
 `transport` in that case.
 
+**SPA navigation.** `PageTracker` reports one `page` event when it
+starts, plus a `Page Duration` when the tab is hidden or unloaded.
+It does **not** watch the History API, so a client-side route
+change is not a page view — call it from your router:
+
+```ts
+router.afterEach(to => analytics.page(to.fullPath));
+```
+
+`page(path)` defaults to `location.pathname` and puts `title` in
+the properties, which you can override. There used to be a
+`PageTracker.navigate()` for exactly this; nothing called it, and
+a probe the app has to drive by hand is just a method call on the
+instance.
+
 **Global pollution.** One global, opt-out with
 `globalName: false`. `window.fetch` is patched but restored on
 `stop()`/`destroy()`; patch after other libraries that wrap
@@ -320,13 +349,21 @@ routinely carries personal data ("Hi Sarah", a message preview),
 so it is opt-in per element. The key stays present so the
 property schema does not depend on which element was clicked.
 
-**SSR.** `readPageContext()` (`adapters/page-context.ts`, shared by
-every probe) returns empty strings instead of touching `document`,
-and jQuery/Angular adapters no-op when their framework is absent,
-so a Node render does not throw. It is the probes' own wiring that
-is browser-only — `new Analytics()` still registers
-`visibilitychange` / `beforeunload` listeners — so call `init()`
-from a browser-only entry point anyway.
+**SSR.** Three things keep a Node render from throwing:
+
+- `readPageContext()` (`adapters/page-context.ts`, shared by every
+  probe) returns empty strings instead of touching `document`.
+- jQuery / Angular adapters no-op when their framework is absent.
+- Everything that reaches for a DOM global at *construction*
+  time is behind `hasDom()` (`core/dom.ts`): `new Analytics()`
+  registers its `visibilitychange` / `beforeunload` listeners
+  only when one exists, and so does the queue's `online`
+  listener.
+
+What is still browser-only is *tracking*: `track()` and `page()`
+read `location`, `document.title` and `navigator`. Constructing
+and destroying the SDK on the server is safe; recording events
+there is not.
 
 ## Delivery & teardown
 
@@ -354,6 +391,11 @@ A failed batch is never lost to a *temporary* outage, and an
 backoff. `flush()` never rejects — every automatic caller does
 `void this.flush()`, so a rejection would surface as an unhandled
 promise rejection.
+
+A `flush()` that finds one already running hands back that same
+promise instead of resolving at once, so `await flush()` really
+means "the buffer has been dealt with" and not "a flush has been
+scheduled". That is what makes `close()` trustworthy.
 
 Teardown releases everything the instance owns:
 
@@ -503,7 +545,15 @@ explicitly:
   detaches silently
 - `network.test.mjs` — all three transports emit identical names
   and properties; each adapter no-ops when its framework is
-  missing; `init()` is idempotent
+  missing; `init()` is idempotent; the `network` / `frameworks`
+  option matrix resolves the same way in both entry points
+- `robustness.test.mjs` — SSR construction, concurrent `flush()`
+  sharing one request, `close()` draining the buffer, and unit
+  tests for the factory / session / destination. The four cases
+  the SDK still shares with the host (no `crypto.randomUUID`,
+  disabled storage, a throwing plugin, a request that never
+  settles) are `todo` tests: they assert the target behaviour and
+  go green when that lands
 - `architecture.test.mjs` — asserts core never imports adapters,
   the barrel never pulls in a framework adapter, no adapter
   imports `@angular/*` or `rxjs`, every listener can be removed,

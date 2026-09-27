@@ -422,6 +422,114 @@ test("reset() forgets the active recorder", () => {
   );
 });
 
+// The two switches (`network.*` defaults, `frameworks.*` force)
+// used to be parsed in two places that disagreed, so the same
+// config could install an adapter through one entry point and
+// skip it through the other. One matrix per entry point keeps
+// them honest.
+const FETCH_MATRIX = [
+  [{}, true, "no options: on by default"],
+  [{ network: { fetch: false } }, false, "network.fetch: off"],
+  [{ network: false }, false, "network: false switches everything off"],
+  [{ frameworks: { fetch: false } }, false, "frameworks.fetch: force off"],
+  [
+    { network: { fetch: true }, frameworks: { fetch: false } },
+    false,
+    "frameworks.fetch wins over network.fetch",
+  ],
+  [
+    { network: { fetch: false }, frameworks: { fetch: true } },
+    true,
+    "frameworks.fetch wins over network.fetch",
+  ],
+];
+
+test("init() resolves the fetch matrix the same way as the report", async () => {
+  for (const [options, expected, why] of FETCH_MATRIX) {
+    reset();
+    env.reset();
+
+    globalThis.window.fetch = globalThis.fetch;
+    const original = globalThis.window.fetch;
+
+    const analytics = init({
+      endpoint: "/api/analytics/events",
+      ...options,
+    });
+
+    const patched = globalThis.window.fetch !== original;
+
+    assert.equal(
+      patched,
+      expected,
+      `init(${JSON.stringify(options)}) -> fetch adapter installed ` +
+        `${patched}, expected ${expected} (${why})`,
+    );
+
+    const report = await registerDetectedAdapters(analytics);
+
+    assert.equal(
+      report.fetch === "registered",
+      expected,
+      `init(${JSON.stringify(options)}) -> report ${report.fetch} ` +
+        `(${why})`,
+    );
+
+    analytics.destroy();
+    reset();
+  }
+});
+
+test("registerDetectedAdapters resolves the same matrix from its arguments", async () => {
+  for (const [options, expected, why] of FETCH_MATRIX) {
+    // No arguments means "carry on with init()'s config", which
+    // is its own case below, not a row of the matrix.
+    if (Object.keys(options).length === 0) continue;
+
+    reset();
+    env.reset();
+
+    globalThis.window.fetch = globalThis.fetch;
+
+    // Baseline: init() asked for no fetch adapter, so the report
+    // reflects these arguments and not init()'s bookkeeping.
+    const analytics = init({
+      endpoint: "/api/analytics/events",
+      network: { fetch: false },
+    });
+
+    const report = await registerDetectedAdapters(analytics, options);
+
+    assert.equal(
+      report.fetch === "registered",
+      expected,
+      `registerDetectedAdapters(${JSON.stringify(options)}) -> ` +
+        `${report.fetch}, expected ${expected} (${why})`,
+    );
+
+    analytics.destroy();
+    reset();
+  }
+
+  // No arguments: init()'s config still applies.
+  reset();
+  env.reset();
+
+  globalThis.window.fetch = globalThis.fetch;
+
+  const gated = init({
+    endpoint: "/api/analytics/events",
+    network: { fetch: false },
+  });
+
+  const inherited = await registerDetectedAdapters(gated);
+
+  assert.equal(inherited.fetch, "skipped");
+
+  gated.destroy();
+  reset();
+});
+
 test("registerDetectedAdapters wires jQuery only when present", async () => {
   reset();
   env.reset();

@@ -1,3 +1,4 @@
+import { hasDom } from "../dom";
 import type { AnalyticsContext } from "../domain";
 import type { DebugController } from "../debug/debug-controller";
 import type { Destination } from "../transport/destination";
@@ -46,7 +47,16 @@ export class EventQueue {
 
   private readonly debug: DebugController;
 
-  private flushing = false;
+  /**
+   * The flush currently running, if any.
+   *
+   * Kept as the promise rather than a boolean so a concurrent
+   * `flush()` can hand it back instead of resolving at once:
+   * `await flush()` and `close()` mean "the buffer has been
+   * dealt with when this settles", and returning undefined
+   * while another flush owned the buffer made that a lie.
+   */
+  private inFlight?: Promise<void>;
 
   private timer?: number;
 
@@ -72,7 +82,9 @@ export class EventQueue {
     // A dead network is the normal cause of a failed batch,
     // so recovering connectivity is worth a retry right away
     // instead of waiting out the backoff.
-    window.addEventListener("online", this.handleOnline);
+    if (hasDom()) {
+      window.addEventListener("online", this.handleOnline);
+    }
   }
 
   enqueue(context: AnalyticsContext): void {
@@ -118,69 +130,80 @@ export class EventQueue {
    * Events are removed from the buffer only once the
    * destination accepted them, so a failed batch stays queued
    * and is retried with a backoff instead of being lost.
+   *
+   * A flush already in progress owns the buffer: a second call
+   * returns that same promise instead of resolving at once, so
+   * `await flush()` only settles once the buffer has actually
+   * been dealt with.
    */
-  async flush(): Promise<void> {
+  flush(): Promise<void> {
 
-    if (this.flushing) return;
-    if (this.queue.length === 0) return;
+    if (this.inFlight) return this.inFlight;
 
-    this.flushing = true;
+    if (this.queue.length === 0) return Promise.resolve();
+
+    const run = this.drain().finally(() => {
+      this.inFlight = undefined;
+    });
+
+    this.inFlight = run;
+
+    return run;
+
+  }
+
+  private async drain(): Promise<void> {
+
     this.clearTimer();
     this.clearRetryTimer();
 
-    try {
+    while (this.queue.length > 0) {
 
-      while (this.queue.length > 0) {
+      // Peek, do not splice: the batch is only removed after
+      // a successful send.
+      const batch = this.queue.slice(
+        0,
+        this.options.batchSize
+      );
 
-        // Peek, do not splice: the batch is only removed after
-        // a successful send.
-        const batch = this.queue.slice(
-          0,
-          this.options.batchSize
+      let error: unknown;
+
+      try {
+
+        // Debug → FLUSHING
+        batch.forEach(ctx =>
+          this.debug.emit({
+            stage: "flushing",
+            context: ctx,
+            timestamp: Date.now(),
+          })
         );
 
-        let error: unknown;
+        await this.destination.send(batch);
 
-        try {
-
-          // Debug → FLUSHING
-          batch.forEach(ctx =>
-            this.debug.emit({
-              stage: "flushing",
-              context: ctx,
-              timestamp: Date.now(),
-            })
-          );
-
-          await this.destination.send(batch);
-
-        } catch (caught) {
-          error = caught;
-        }
-
-        if (!error) {
-          this.queue.splice(0, batch.length);
-          this.failures = 0;
-          continue;
-        }
-
-        // The batch stays queued. Give up only once the retry
-        // budget is spent, so a short outage is survivable and
-        // a permanent one does not retry forever.
-        if (this.failures >= this.options.maxRetries) {
-          this.drop(batch, error);
-          this.failures = 0;
-          continue;
-        }
-
-        this.failures += 1;
-        this.scheduleRetry();
-        break;
-
+      } catch (caught) {
+        error = caught;
       }
 
-    } finally {
-      this.flushing = false;
+      if (!error) {
+        this.queue.splice(0, batch.length);
+        this.failures = 0;
+        continue;
+      }
+
+      // The batch stays queued. Give up only once the retry
+      // budget is spent, so a short outage is survivable and
+      // a permanent one does not retry forever.
+      if (this.failures >= this.options.maxRetries) {
+        this.drop(batch, error);
+        this.failures = 0;
+        continue;
+      }
+
+      this.failures += 1;
+      this.scheduleRetry();
+      break;
+
     }
 
   }
@@ -196,7 +219,9 @@ export class EventQueue {
     this.clearTimer();
     this.clearRetryTimer();
 
-    window.removeEventListener("online", this.handleOnline);
+    if (hasDom()) {
+      window.removeEventListener("online", this.handleOnline);
+    }
 
   }
 

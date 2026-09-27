@@ -4,6 +4,12 @@ import type { DebugEvent } from "./debug-event";
 import { STAGE_COLORS } from "./stage-colors";
 
 /**
+ * Rows the panel keeps, and the cap on the buffer behind it.
+ * One constant so the two cannot disagree.
+ */
+const MAX_ROWS = 30;
+
+/**
  * The on-page panel.
  *
  * It no longer subscribes to the bus itself: the inspector is
@@ -19,6 +25,10 @@ export class DebugInspector {
   private list?: HTMLDivElement;
   private minimizeBtn?: HTMLButtonElement;
   private readonly events: DebugEvent[] = [];
+
+  /** Rows waiting for the next frame. */
+  private readonly pending: DebugEvent[] = [];
+  private frame?: number;
   private collapsed = false;
 
   start(): void {
@@ -32,6 +42,7 @@ export class DebugInspector {
   stop(): void {
 
     this.minimizeBtn?.removeEventListener("click", this.handleToggle);
+    this.cancelFrame();
 
     this.panel?.remove();
     this.panel = undefined;
@@ -41,6 +52,7 @@ export class DebugInspector {
     this.minimizeBtn = undefined;
 
     this.events.length = 0;
+    this.pending.length = 0;
 
   }
 
@@ -67,6 +79,18 @@ export class DebugInspector {
   toggle(collapsed?: boolean): void {
     this.collapsed = collapsed ?? !this.collapsed;
     this.applyCollapsed();
+
+    // Rows queued for the next frame are dropped either way:
+    // on collapse they must not land in a hidden panel, and on
+    // expand renderList() rebuilds the same rows from `events`.
+    this.cancelFrame();
+    this.pending.length = 0;
+
+    // Events that arrived while collapsed were buffered, not
+    // rendered, so the list has to be rebuilt on the way back.
+    if (!this.collapsed) {
+      this.renderList();
+    }
   }
 
   private applyCollapsed(): void {
@@ -86,16 +110,105 @@ export class DebugInspector {
 
   }
 
+  /**
+   * Whether rendering is worth doing right now.
+   *
+   * A collapsed panel — or a background tab — does not need
+   * rows built for it; the events are buffered and rendered
+   * when the panel is expanded again.
+   */
+  private visible(): boolean {
+    return !this.collapsed && document.hidden !== true;
+  }
+
   /** Feed one pipeline event into the panel. */
   onEvent(event: DebugEvent): void {
 
     this.events.unshift(event);
 
-    if (this.events.length > 30) {
+    if (this.events.length > MAX_ROWS) {
       this.events.pop();
     }
 
-    this.renderList();
+    // Rebuilding every row on every event meant ~150 DOM nodes
+    // per event, which is what made a burst of events jank the
+    // page. One row goes in at the front instead, and a burst
+    // collapses into a single frame instead of one layout per
+    // event.
+    if (!this.visible()) return;
+
+    this.pending.push(event);
+    this.schedule();
+
+  }
+
+  /**
+   * Coalesce a burst into one paint.
+   *
+   * Without rAF (SSR, node tests) there is no frame to wait for,
+   * so the rows go in immediately — the panel is never mounted
+   * in those runtimes anyway.
+   */
+  private schedule(): void {
+
+    if (this.frame !== undefined) return;
+
+    if (typeof requestAnimationFrame !== "function") {
+
+      this.flushPending();
+      return;
+
+    }
+
+    this.frame = requestAnimationFrame(() => {
+
+      this.frame = undefined;
+      this.flushPending();
+
+    });
+
+  }
+
+  private cancelFrame(): void {
+
+    if (this.frame === undefined) return;
+
+    cancelAnimationFrame(this.frame);
+
+    this.frame = undefined;
+
+  }
+
+  private flushPending(): void {
+
+    // Arrival order: each row goes to the front, so the last
+    // one inserted is the newest and ends up on top.
+    for (const event of this.pending) {
+      this.prependRow(event);
+    }
+
+    this.pending.length = 0;
+
+  }
+
+  private prependRow(event: DebugEvent): void {
+
+    if (!this.list) return;
+
+    this.list.insertBefore(
+      this.renderRow(event),
+      this.list.firstChild
+    );
+
+    while (this.list.children.length > MAX_ROWS) {
+
+      const last = this.list.lastChild;
+
+      if (!last) break;
+
+      this.list.removeChild(last);
+
+    }
 
   }
 

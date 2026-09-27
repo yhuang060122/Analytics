@@ -109,6 +109,65 @@ interface InstallState {
   lastOptions: FrameworkOptions;
 }
 
+/**
+ * The outcome of reading the two overlapping switches:
+ * `network` (per-transport defaults) and `frameworks` (a
+ * force-on / force-off override).
+ *
+ * `init()` and `registerDetectedAdapters()` used to parse them
+ * separately, and the copies disagreed: `init()` read only
+ * `network === false` and `frameworks.fetch`, so
+ * `init({ network: { fetch: false } })` installed the fetch
+ * adapter anyway while `registerDetectedAdapters()` honoured it.
+ * Same config, two results. Both now go through here.
+ *
+ * `network: false` switches the whole thing off; `network.fetch`
+ * / `network.jquery` are the defaults; `frameworks.*` wins over
+ * both because that is what "force" means.
+ */
+interface ResolvedAdapters {
+  /** Undefined when network tracking is off entirely. */
+  network?: NetworkTrackerOptions;
+
+  fetch: boolean;
+  jquery: boolean;
+}
+
+/**
+ * Tracker options without the on/off switches.
+ *
+ * `fetch` / `jquery` are configuration, not tracker options —
+ * passing them through would put a stray `fetch: false` key on
+ * every network event's option bag.
+ */
+function trackerOptions(
+  network: NetworkInitOptions | undefined,
+): NetworkTrackerOptions {
+  if (!network) return {};
+
+  return {
+    ignoreUrls: network.ignoreUrls,
+    transport: network.transport,
+    normalizeUrl: network.normalizeUrl,
+  };
+}
+
+function resolveAdapters(options: FrameworkOptions): ResolvedAdapters {
+  // `false` is the only way to say "off"; an absent `network`
+  // means "track with the defaults".
+  if (options.network === false) {
+    return { fetch: false, jquery: false };
+  }
+
+  const network = options.network;
+
+  return {
+    network: trackerOptions(network),
+    fetch: options.frameworks?.fetch ?? network?.fetch ?? true,
+    jquery: options.frameworks?.jquery ?? network?.jquery ?? true,
+  };
+}
+
 function emptyInstall(): InstallState {
   return {
     lastOptions: {},
@@ -142,13 +201,10 @@ export function init(options: InitOptions): Analytics {
 
   const analytics = createBrowserAnalytics(config);
 
-  const network = options.network === false ? undefined : options.network;
+  const resolved = resolveAdapters(options);
 
-  if ((options.frameworks?.fetch ?? true) && options.network !== false) {
-    registerFetchAdapter(
-      analytics,
-      network?.fetch === false ? undefined : network,
-    );
+  if (resolved.fetch) {
+    registerFetchAdapter(analytics, resolved.network);
   }
 
   setActiveRecorder(analytics);
@@ -232,31 +288,29 @@ export async function registerDetectedAdapters(
     ...options,
   };
 
-  const network = merged.network === false ? undefined : merged.network;
+  const resolved = resolveAdapters(merged);
 
   // ---- fetch ----
-  const wantsFetch =
-    merged.frameworks?.fetch ?? (network?.fetch ?? true);
-
-  if (merged.network === false || !wantsFetch) {
+  if (!resolved.fetch) {
     report.fetch = isFetchAvailable() ? "skipped" : "unavailable";
   } else {
-    report.fetch = registerFetchAdapter(analytics, network)
+    report.fetch = registerFetchAdapter(analytics, resolved.network)
       ? "registered"
       : "unavailable";
   }
 
   // ---- jQuery ----
-  const wantsJquery = merged.frameworks?.jquery ?? true;
-
   if (installed.jqueryTracker) {
     report.jquery = "registered";
-  } else if (!wantsJquery || merged.network === false) {
+  } else if (!resolved.jquery) {
     report.jquery = isJQueryAvailable() ? "skipped" : "unavailable";
   } else if (isJQueryAvailable()) {
     const { JQueryAjaxTracker } = await import("./jquery/index");
 
-    const tracker: Tracker = new JQueryAjaxTracker(analytics, network ?? {});
+    const tracker: Tracker = new JQueryAjaxTracker(
+      analytics,
+      resolved.network ?? {},
+    );
 
     tracker.start();
     analytics.registerTracker(tracker);
