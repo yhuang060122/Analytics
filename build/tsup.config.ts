@@ -3,6 +3,11 @@
 import { defineConfig } from "tsup";
 
 /**
+ * Lives in build/ so the repository root keeps its
+ * dependencies to zero: tsup, typescript and rollup are
+ * installed here, not next to the sources. Everything is
+ * therefore relative to this file, one level up.
+ *
  * Two builds from the same sources:
  *
  *   dist/analytics.js       ESM, the library entry (`index.ts`).
@@ -25,7 +30,7 @@ const shared = {
   target: "es2022",
   platform: "browser",
   sourcemap: true,
-  outDir: "dist",
+  outDir: "../dist",
 
   /**
    * One file per build. Code splitting (tsup's default for
@@ -47,9 +52,9 @@ const shared = {
   /**
    * No .d.ts: types still come from the TypeScript sources
    * this package ships (see the exports map; the demo builds
-   * from source). Emitting declarations would need a root
-   * typescript install, which deliberately lives under
-   * demo/ instead.
+   * from source). Emitting declarations would need the
+   * typescript in demo/ (or this one) at the root, which is
+   * what keeping the build in build/ avoids.
    */
   dts: false,
 
@@ -67,13 +72,13 @@ export default defineConfig([
   {
     ...shared,
     name: "esm",
-    entry: { analytics: "analytics/index.ts" },
+    entry: { analytics: "../analytics/index.ts" },
     format: ["esm"],
   },
   {
     ...shared,
     name: "iife",
-    entry: { "analytics.iife": "analytics/iife.ts" },
+    entry: { "analytics.iife": "../analytics/iife.ts" },
     format: ["iife"],
   },
 ]);

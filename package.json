@@ -11,14 +11,7 @@
     "./adapters/angular": "./analytics/adapters/angular/index.ts"
   },
   "scripts": {
-    "build": "tsup",
+    "build": "npm --prefix build run build",
     "test": "node demo/node_modules/typescript/bin/tsc -p tests/tsconfig.build.json && node --test tests/tracker-port.test.mjs tests/registry.test.mjs tests/queue.test.mjs tests/debug-plugin.test.mjs tests/architecture.test.mjs tests/network.test.mjs"
-  },
-  "devDependencies": {
-    "tsup": "^8.5.1",
-    "typescript": "~6.0.2"
-  },
-  "optionalDependencies": {
-    "@rollup/rollup-win32-x64-msvc": "^4.63.5"
   }
 }

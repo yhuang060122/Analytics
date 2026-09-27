@@ -430,6 +430,38 @@ test("the script-tag entry stays out of the library", () => {
   );
 });
 
+test("the root installs nothing", () => {
+  // Two dependency islands, both deliberate: demo/ owns the
+  // toolchain the editor and vite need, build/ owns the
+  // bundler. The library itself and its tests install
+  // nothing — `npm test` even reaches for demo's typescript.
+  // A third place to install would be a third thing to
+  // forget before any of this runs.
+  const pkg = JSON.parse(
+    readFileSync(join(root, "package.json"), "utf8"),
+  );
+
+  const declared = [
+    "dependencies",
+    "devDependencies",
+    "peerDependencies",
+    "optionalDependencies",
+  ].filter((field) => pkg[field]);
+
+  assert.deepEqual(
+    declared,
+    [],
+    "dependencies belong in demo/ or build/, never at the root",
+  );
+
+  ["demo", "build"].forEach((island) => {
+    assert.ok(
+      existsSync(join(root, island, "package.json")),
+      `${island}/ must own its own package.json`,
+    );
+  });
+});
+
 test("npm test runs every test file", () => {
   // The script lists files explicitly (cmd.exe does not expand
   // globs), so a new file is silently skipped unless it gets

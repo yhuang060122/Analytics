@@ -405,11 +405,19 @@ Because the inspector's lifetime is its plugin's lifetime,
 ## Build
 
 ```
+npm --prefix build install   # once
 npm run build
 ```
 
-tsup, two entries, two formats, same sources (see
-`tsup.config.ts`):
+The root installs nothing — it only forwards: `npm run build`
+is `npm --prefix build run build`. `build/` has its own
+package.json and holds tsup, typescript and rollup, the same
+way `demo/` holds vite and the typescript the tests use. Three
+islands, three lockfiles, and no `npm install` at the root that
+nobody remembers running.
+
+Inside `build/tsup.config.ts`: two entries, two formats, same
+sources:
 
 | File | Format | Loaded with |
 | --- | --- | --- |
@@ -424,18 +432,18 @@ the TypeScript sources through the exports map.
 
 One rule goes with those two entries: nothing in `analytics/`
 imports `iife.ts`. It is reachable only through
-`tsup.config.ts`, because reaching it through the barrel would
-mean every `import "analytics"` installs the SDK with whatever
-options the page happens to have set. The architecture test
-asserts both halves.
+`build/tsup.config.ts`, because reaching it through the barrel
+would mean every `import "analytics"` installs the SDK with
+whatever options the page happens to have set. The architecture
+test asserts both halves — and that the root keeps declaring no
+dependencies at all.
 
 Deliberately left out of the build:
 
 - **`.d.ts`** — types come from the TypeScript sources this
   package ships; the exports map still points at them and the
-  demo builds from source. Emitting declarations would need a
-  root-level `typescript`, which deliberately lives under
-  `demo/`.
+  demo builds from source. Emitting declarations would pull
+  typescript out of the islands it currently lives in.
 - **minification** — the files are read by humans debugging a
   tracking issue on a page they do not control.
 - **`clean`** — the two configs are built in parallel, so
@@ -444,12 +452,11 @@ Deliberately left out of the build:
   its own file; rename one and the old artefact is left behind
   until the folder itself is deleted.
 
-Requires `npm install` at the root. That install carries one
-odd entry: `@rollup/rollup-win32-x64-msvc` is pinned as an
-optional dependency because npm skipped rollup's platform
-binary (npm/cli#4828), and tsup loads rollup whether or not
-declarations are emitted. npm ignores the pin on other
-platforms.
+`build/` carries one odd entry: `@rollup/rollup-win32-x64-msvc`
+is pinned as an optional dependency because npm skipped
+rollup's platform binary (npm/cli#4828), and tsup loads rollup
+whether or not declarations are emitted. npm ignores the pin on
+other platforms.
 
 ## Tests
 

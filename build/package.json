@@ -1,0 +1,15 @@
+{
+  "name": "analytics-build",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "build": "tsup"
+  },
+  "devDependencies": {
+    "tsup": "^8.5.1",
+    "typescript": "~6.0.2"
+  },
+  "optionalDependencies": {
+    "@rollup/rollup-win32-x64-msvc": "^4.63.5"
+  }
+}
