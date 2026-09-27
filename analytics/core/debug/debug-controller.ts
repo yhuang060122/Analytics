@@ -1,9 +1,17 @@
 // core/debug/debug-controller.ts
 
 import { DebugEventBus } from "./event-bus";
-import { DebugInspector } from "./debug-inspector";
+import type { DebugInspector } from "./debug-inspector";
+import {
+  CONSOLE_PLUGIN,
+  createConsolePlugin,
+} from "./console-plugin";
+import {
+  INSPECTOR_PLUGIN,
+  InspectorDebugPlugin,
+} from "./inspector-plugin";
 import type { DebugEvent } from "./debug-event";
-import { STAGE_COLORS } from "./stage-colors";
+import type { DebugPlugin } from "./plugin";
 
 export interface DebugOptions {
   enabled?: boolean;
@@ -11,12 +19,16 @@ export interface DebugOptions {
   inspector?: boolean;
 }
 
+interface PluginEntry {
+  plugin: DebugPlugin;
+  unsubscribe: () => void;
+}
+
 export class DebugController {
 
   readonly bus = new DebugEventBus();
 
-  private inspectorView?: DebugInspector;
-  private consoleUnsubscribe?: () => void;
+  private readonly plugins = new Map<string, PluginEntry>();
 
   private enabled = false;
 
@@ -36,6 +48,10 @@ export class DebugController {
 
   }
 
+  /**
+   * The two built-ins are plugins like any other: the flags
+   * only decide which names get installed into the registry.
+   */
   enable(options: DebugOptions = {}): void {
 
     this.enabled = true;
@@ -59,51 +75,118 @@ export class DebugController {
 
   }
 
+  /** Install or remove the built-in console logger. */
   console(enable: boolean): void {
 
-    this.consoleUnsubscribe?.();
-    this.consoleUnsubscribe = undefined;
+    if (enable) {
+      this.installBuiltIn(CONSOLE_PLUGIN);
+      return;
+    }
 
-    if (!enable) return;
-
-    this.consoleUnsubscribe = this.bus.subscribe(event => {
-
-      console.log(
-        `%c${event.stage.toUpperCase()}`,
-        `color:${STAGE_COLORS[event.stage]};font-weight:bold`,
-        event.context.event.name,
-        event.context.event.properties
-      );
-
-    });
+    this.unregisterDebugPlugin(CONSOLE_PLUGIN);
 
   }
 
+  /** Install or remove the built-in on-page panel. */
   inspector(enable: boolean): void {
 
-    if (!enable) {
-
-      this.inspectorView?.stop();
-      this.inspectorView = undefined;
-
+    if (enable) {
+      this.installBuiltIn(INSPECTOR_PLUGIN);
       return;
-
     }
 
-    if (this.inspectorView) return;
-
-    this.inspectorView = new DebugInspector(this.bus);
-    this.inspectorView.start();
+    this.unregisterDebugPlugin(INSPECTOR_PLUGIN);
 
   }
 
   /**
-   * The on-page inspector panel, if enabled.
+   * Attach a plugin: anything that wants to watch the pipeline
+   * without being wired into the SDK.
+   *
+   * Returns an unregister function, so `const off = register(p)`
+   * and `off()` read the same way as `bus.subscribe()` does.
+   *
+   * Registering the same `name` twice replaces the earlier
+   * plugin — a hot reload would otherwise leave two copies
+   * subscribed and deliver every event twice.
+   */
+  registerDebugPlugin(plugin: DebugPlugin): () => void {
+
+    this.unregisterDebugPlugin(plugin.name);
+
+    const unsubscribe = this.bus.subscribe(
+      event => plugin.onEvent(event)
+    );
+
+    this.plugins.set(plugin.name, { plugin, unsubscribe });
+
+    return () => this.unregisterDebugPlugin(plugin.name);
+
+  }
+
+  /**
+   * Detach a plugin by name and, if it has one, run its
+   * teardown. Returns false when nothing was registered under
+   * that name.
+   */
+  unregisterDebugPlugin(name: string): boolean {
+
+    const entry = this.plugins.get(name);
+
+    if (!entry) return false;
+
+    entry.unsubscribe();
+    entry.plugin.stop?.();
+    this.plugins.delete(name);
+
+    return true;
+
+  }
+
+  /** Names of the plugins currently attached. */
+  get debugPlugins(): string[] {
+    return [...this.plugins.keys()];
+  }
+
+  /**
+   * The on-page inspector panel, if the built-in is installed.
    * Host apps can mount controls into it via
    * `getInspector()?.getToolbar()`.
    */
   getInspector(): DebugInspector | undefined {
-    return this.inspectorView;
+
+    const entry = this.plugins.get(INSPECTOR_PLUGIN);
+
+    return entry?.plugin instanceof InspectorDebugPlugin
+      ? entry.plugin.getInspector()
+      : undefined;
+
+  }
+
+  /**
+   * Release every plugin, built-ins included. Called by
+   * `Analytics.destroy()` / `close()`, so a host-registered
+   * plugin never outlives the SDK.
+   */
+  teardown(): void {
+
+    [...this.plugins.keys()].forEach(name =>
+      this.unregisterDebugPlugin(name)
+    );
+
+  }
+
+  private installBuiltIn(name: string): void {
+
+    if (this.plugins.has(name)) return;
+
+    const plugin =
+      name === CONSOLE_PLUGIN
+        ? createConsolePlugin()
+        : new InspectorDebugPlugin();
+
+    this.registerDebugPlugin(plugin);
+
   }
 
 }

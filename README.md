@@ -338,6 +338,55 @@ Every listener the SDK registers is a named field, so
 `architecture.test.mjs` fails if one is added without a matching
 `removeEventListener`.
 
+## Debug plugins
+
+`core/debug` is exported from the root barrel, so anything can
+watch the pipeline without being wired into the SDK:
+
+```ts
+import type { DebugEvent, DebugPlugin } from "analytics";
+
+const toDatadog: DebugPlugin = {
+  name: "datadog",
+  onEvent(event: DebugEvent) {
+    metrics.increment(`analytics.${event.stage}`);
+  },
+};
+
+const off = analytics.debug.registerDebugPlugin(toDatadog);
+// ...
+off(); // or: analytics.debug.unregisterDebugPlugin("datadog")
+```
+
+- Registering a name that is already taken **replaces** the
+  previous plugin, so a hot reload cannot deliver every event
+  twice.
+- `stop?()` is the teardown hook. It runs on `unregister` and on
+  `Analytics.destroy()` / `close()`, so no plugin outlives the
+  SDK.
+- Plugins receive nothing while `debug.enabled` is false —
+  `emit()` short-circuits before the bus.
+- `analytics.debug.debugPlugins` lists the attached names.
+
+The two built-ins are plugins too, installed by name:
+
+| Name | Module | Notes |
+| --- | --- | --- |
+| `console` | `core/debug/console-plugin.ts` | stateless; the console logger |
+| `inspector` | `core/debug/inspector-plugin.ts` | owns the DOM panel; `stop()` removes it |
+
+`debug: { console: true, inspector: true }` therefore means
+"install these two names", and either can be removed the same way
+as a custom plugin:
+
+```ts
+import { CONSOLE_PLUGIN } from "analytics";
+analytics.debug.unregisterDebugPlugin(CONSOLE_PLUGIN);
+```
+
+Because the inspector's lifetime is its plugin's lifetime,
+`destroy()` removes the panel with it.
+
 ## Tests
 
 ```
@@ -353,6 +402,9 @@ Compiles core + adapters with tsc, then runs `node --test tests/`:
 - `queue.test.mjs` — failed batch stays buffered and is retried,
   dropped only after the retry budget, `flush()` never rejects,
   overflow drops the oldest, teardown clears every listener
+- `debug-plugin.test.mjs` — plugins observe the whole pipeline,
+  same-name registration replaces instead of doubling, unregister
+  detaches silently
 - `network.test.mjs` — all three transports emit identical names
   and properties; each adapter no-ops when its framework is
   missing; `init()` is idempotent

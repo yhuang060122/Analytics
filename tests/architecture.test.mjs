@@ -249,6 +249,67 @@ test("every listener the SDK registers can be removed again", () => {
   });
 });
 
+test("the debug port is public", () => {
+  // A plugin author cannot type `onEvent(event: DebugEvent)`
+  // if these are not exported from the root barrel, and a
+  // missing export is otherwise invisible until someone tries
+  // to import it.
+  const barrel = readFileSync(join(root, "analytics", "index.ts"), "utf8");
+
+  assert.match(
+    barrel,
+    /export \* from "\.\/core\/debug"/,
+    "the root barrel must export core/debug",
+  );
+
+  const debugIndex = readFileSync(
+    join(coreDir, "debug", "index.ts"),
+    "utf8",
+  );
+
+  ["debug-event", "event-bus", "plugin"].forEach((name) => {
+    assert.match(
+      debugIndex,
+      new RegExp(`export \\* from "\\./${name}"`),
+      `core/debug/index.ts must export ./${name}`,
+    );
+  });
+
+  const controller = readFileSync(
+    join(coreDir, "debug", "debug-controller.ts"),
+    "utf8",
+  );
+
+  assert.match(controller, /registerDebugPlugin\(/);
+  assert.match(controller, /unregisterDebugPlugin\(/);
+});
+
+test("built-in debug sinks live in their own modules", () => {
+  // They used to be inline in DebugController, which is why
+  // there was no way to add a third one.
+  const controller = codeOf(
+    join(coreDir, "debug", "debug-controller.ts"),
+  );
+
+  assert.doesNotMatch(
+    controller,
+    /new DebugInspector\(/,
+    "the panel belongs to inspector-plugin.ts",
+  );
+
+  assert.doesNotMatch(
+    controller,
+    /console\.log\(/,
+    "the logger belongs to console-plugin.ts",
+  );
+
+  assert.doesNotMatch(
+    controller,
+    /STAGE_COLORS/,
+    "colour handling belongs to the plugins, not the facade",
+  );
+});
+
 test("npm test runs every test file", () => {
   // The script lists files explicitly (cmd.exe does not expand
   // globs), so a new file is silently skipped unless it gets

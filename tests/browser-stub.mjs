@@ -33,10 +33,44 @@ export function installBrowser(fetchImpl) {
     location: { pathname: "/p", href: "http://x/p", search: "" },
   });
 
+  /**
+   * Just enough DOM for DebugInspector to build its panel:
+   * createElement + body.appendChild + the handful of
+   * properties the panel touches.
+   */
+  const element = (tag) => {
+    const el = {
+      tagName: tag.toUpperCase(),
+      children: [],
+      textContent: "",
+      id: "",
+      style: { cssText: "" },
+      appendChild(child) {
+        el.children.push(child);
+        return child;
+      },
+      removeChild(child) {
+        const i = el.children.indexOf(child);
+        if (i >= 0) el.children.splice(i, 1);
+        return child;
+      },
+      remove() {},
+      setAttribute() {},
+      addEventListener() {},
+      removeEventListener() {},
+      querySelector: () => null,
+      querySelectorAll: () => [],
+    };
+
+    return el;
+  };
+
   globalThis.document = Object.assign(target(reg.doc), {
     visibilityState: "visible",
     title: "demo",
     referrer: "",
+    createElement: element,
+    body: element("body"),
   });
 
   globalThis.sessionStorage = {

@@ -11,6 +11,7 @@
     "outDir": "./.build"
   },
   "include": [
+    "../analytics/index.ts",
     "../analytics/core/api/analytics.ts",
     "../analytics/adapters/browser/auto-track.ts",
     "../analytics/adapters/index.ts",

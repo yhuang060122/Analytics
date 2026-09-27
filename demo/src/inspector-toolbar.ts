@@ -1,4 +1,5 @@
 import { analytics } from "./analytics";
+import { showDestroyedNotice } from "./destroyed-notice";
 
 /**
  * Mounts demo controls into the Analytics
@@ -83,9 +84,10 @@ export function mountInspectorToolbar(): void {
 
     clearInterval(pendingTimer);
 
-    outageBtn.disabled = true;
-    destroyBtn.disabled = true;
-    destroyBtn.style.opacity = "0.5";
+    // destroy() tears the debug plugins down, and this toolbar
+    // lives inside the Inspector panel — so it goes away with
+    // them. The notice is standalone and explains that.
+    showDestroyedNotice();
 
     console.log("[demo] destroy() called: no more events tracked");
   });

@@ -1,9 +1,16 @@
 // core/debug/debug-inspector.ts
 
-import { DebugEventBus } from "./event-bus";
 import type { DebugEvent } from "./debug-event";
 import { STAGE_COLORS } from "./stage-colors";
 
+/**
+ * The on-page panel.
+ *
+ * It no longer subscribes to the bus itself: the inspector is
+ * now a plugin, and `InspectorDebugPlugin` forwards events to
+ * `onEvent()`. That keeps the panel a plain renderer, and makes
+ * its lifetime the plugin's lifetime.
+ */
 export class DebugInspector {
 
   private panel?: HTMLDivElement;
@@ -11,24 +18,8 @@ export class DebugInspector {
   private toolbarSlot?: HTMLDivElement;
   private list?: HTMLDivElement;
   private minimizeBtn?: HTMLButtonElement;
-  private unsubscribe?: () => void;
   private readonly events: DebugEvent[] = [];
   private collapsed = false;
-
-  private readonly bus: DebugEventBus;
-
-  constructor(
-    bus: DebugEventBus
-  ) {
-    this.bus = bus;
-  }
-
-  /**
-   * Named so `stop()` can detach it. The button dies with the
-   * panel anyway, but an explicit detach keeps "every listener
-   * can be removed" true without exceptions.
-   */
-  private readonly handleToggle = (): void => this.toggle();
 
   start(): void {
 
@@ -36,16 +27,9 @@ export class DebugInspector {
 
     this.createPanel();
 
-    this.unsubscribe = this.bus.subscribe(
-      event => this.onEvent(event)
-    );
-
   }
 
   stop(): void {
-
-    this.unsubscribe?.();
-    this.unsubscribe = undefined;
 
     this.minimizeBtn?.removeEventListener("click", this.handleToggle);
 
@@ -59,6 +43,13 @@ export class DebugInspector {
     this.events.length = 0;
 
   }
+
+  /**
+   * Named so `stop()` can detach it. The button dies with the
+   * panel anyway, but an explicit detach keeps "every listener
+   * can be removed" true without exceptions.
+   */
+  private readonly handleToggle = (): void => this.toggle();
 
   /**
    * Slot where the host app can mount its own
@@ -95,7 +86,8 @@ export class DebugInspector {
 
   }
 
-  private onEvent(event: DebugEvent): void {
+  /** Feed one pipeline event into the panel. */
+  onEvent(event: DebugEvent): void {
 
     this.events.unshift(event);
 

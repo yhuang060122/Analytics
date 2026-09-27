@@ -80,7 +80,11 @@ export class Analytics implements EventRecorder {
     // Best effort: whatever is still buffered gets one final
     // chance. The retry timer is already stopped, so this is
     // the last attempt, not the first of a series.
-    void this.flush();
+    //
+    // Debug plugins are torn down once that settles, so they
+    // still see the last "sent" events — but they do not
+    // outlive the instance.
+    void this.flush().finally(() => this.debug.teardown());
 
   }
 
@@ -100,6 +104,7 @@ export class Analytics implements EventRecorder {
     await this.flush();
 
     this.queue.stop();
+    this.debug.teardown();
 
   }
 

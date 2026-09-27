@@ -10,6 +10,7 @@
  *   import { createAnalyticsInterceptor } from "analytics/adapters/angular";
  */
 export * from "./core/api";
+export * from "./core/debug";
 export * from "./core/domain";
 export * from "./core/factory";
 export * from "./core/queue";
