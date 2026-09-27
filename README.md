@@ -2,6 +2,8 @@
 
 Frontend tracking SDK. TypeScript, browser-first.
 
+> Language: English | [简体中文](README.zh-CN.md)
+
 The repository is a **directory of sources, not an npm package** —
 there is no `package.json` at the root. What needs installing lives
 in three self-contained islands (`demo/`, `build/`, `tests/`), each
