@@ -1,5 +1,7 @@
 import { BaseTracker } from "../../core/api/tracker";
 import type { EventRecorder } from "../../core/api/tracker";
+import type { AnalyticsPlugin } from "../../core/api/plugin";
+import { isFetchAvailable } from "../detect";
 import {
   NetworkTrackerCore,
   type NetworkTrackerOptions,
@@ -85,3 +87,20 @@ export class FetchTracker extends BaseTracker {
     }
   };
 }
+
+/**
+ * The registry descriptor for this probe.
+ *
+ * `available()` reads `globalThis.fetch`, so an old browser or
+ * a server simply reports `unavailable` instead of having the
+ * probe patch a function that is not there.
+ */
+export const fetchAdapter: AnalyticsPlugin<NetworkTrackerOptions> = {
+  name: "fetch",
+  available: () => isFetchAvailable(),
+  start(host, options) {
+    const tracker = new FetchTracker(host, options);
+    tracker.start();
+    host.registerTracker(tracker);
+  },
+};

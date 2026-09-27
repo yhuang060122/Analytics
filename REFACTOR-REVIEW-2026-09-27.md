@@ -271,3 +271,63 @@ probe.track(name, props)
 `signal`**，于是 AbortController 再正确也不会中止任何东西，超时用例直接超时失败。
 桩必须模拟"真的会响应 abort 的 fetch"：监听 `signal` 的 abort 事件并 reject。
 这条和 §8、§9 那两次同源：**桩比被测系统更宽容时，红灯会指向错误的方向**。
+
+---
+
+## 11. adapters 插件化（一次提交）
+
+### 结论：适合插件化，且"开放式注册表 + 生命周期契约"是对的形态，"动态加载框架"不是
+
+现有 adapters 已经天然具备统一形状（`name` + `start/stop` + 可用性判断），
+唯一的"硬伤"是**内置清单是封闭的**：新增一个 transport 要同时改 `detect.ts`、
+`resolveAdapters()`、`InstallState`、`AdapterReport`、README 五处。插件化正好
+把这条成本降到"只写自己的文件 + 一次注册"。
+
+三个风险被逐一规避（都写进了代码注释）：
+- **动态 import 式"发现"会拆包** —— `splitting:false` 的单文件产物、以及"barrel
+  不拉 jQuery/Angular"的架构约束，都不允许按文件系统扫描。所以发现 = 显式注册，
+  不是扫描。
+- **把 Angular 塞进 start/stop 是语义过载** —— 拦截器无法自己挂上 `HttpClient`。
+  于是契约分两个角色：`AnalyticsPlugin`（SDK 启停）与 `AdapterIntegration`
+  （宿主驱动，`create(host)`），共用同一注册表、同一配置键空间、同一份报告。
+- **再养一个模块级单例** —— 注册表用 `const` 绑定（内容可变、绑定不变），并
+  与 `InstallState` 明确分工：注册表是进程级"有哪些 adapter"，`InstallState`
+  是"当前实例装了哪些"，`reset()` 只清后者。
+
+### 落地清单
+
+- **`core/api/plugin.ts`**（端口，紧邻 tracker.ts）：`PluginHost`（= EventRecorder
+  + registerTracker/unregisterTracker + debug）、`AnalyticsPlugin<TOptions>`（name /
+  available? / start / stop?）、`AdapterIntegration<TOptions,TApi>`（name /
+  available? / create）、`Adapter` 联合 + `isPlugin`/`isIntegration`。
+- **`adapters/registry.ts`**：`AdapterRegistry`（Map<name, Adapter>）+ 进程级
+  `defaultRegistry` + `registerAdapter/unregisterAdapter/getAdapter/listAdapters`。
+  同名注册替换（与 debug 插件同一理由：热重载不双发）。
+- **内置描述符**：`click-tracker.ts`→`clickAdapter`、`page-tracker.ts`→`pageAdapter`、
+  `fetch-tracker.ts`→`fetchAdapter`、`jquery/index.ts`→`jqueryAdapter`、
+  `angular/index.ts`→`angularAdapter`（integration）。每个都自带 `available()`，
+  `detect.ts` 里那份中央判断不再需要人工和 adapter 保持一致。
+- **`adapters/index.ts` 重写**：`InstallState` 的 `fetchTracker/jqueryTracker` 泛化
+  成 `installed: Map<name, {stop}>`；`resolveAdapters()` 泛化成 `planFor(name)`
+  （优先级 `adapters.*` → `frameworks.*`/`autoTrack.*` → `network.*` →
+  `network:false` → on，完全兼容 P1 的 option 矩阵）。`init()` 不再把 autoTrack
+  透传给 `createBrowserAnalytics`（避免双重安装），而是按名装 registry 里的
+  click/page/fetch；`registerDetectedAdapters()` 仍负责动态 import jQuery/Angular
+  描述符（保住"barrel 不拉框架适配器"）。新增 `installAdapters()`（同步 apply）。
+- **`iife.ts`**：读 `window.analyticsAdapters` 数组注册第三方（脚本标签唯一的发现钩子）。
+
+### 向后兼容
+
+`init` / `getAnalytics` / `reset` / `registerFetchAdapter` / `registerDetectedAdapters`
+/ `startAutoTrack` / `createBrowserAnalytics` / `createAnalyticsInterceptor` 全部
+原样；`AdapterReport.fetch/jquery/angular` 三个顶层字段保留（新增 `adapters` 全量
+map）；`network`/`frameworks`/`autoTrack` 三个旧开关仍是别名。**102/102 测试全绿，
+原 94 条一条没改、一条没断**，新增 8 条插件用例（注册/安装/传参、`init({plugins})`、
+禁用与未知名、不可用、抛错不崩、同名替换、integration=manual、`adapters.*` 双向
+覆盖旧开关）。
+
+### 新增第三方 adapter 的最小文件范围
+
+**一个文件**（描述符 + 逻辑）+ 宿主合成根里一次 `registerAdapter(...)`（或
+`init({plugins:[...]})`、或 script 标签下的 `window.analyticsAdapters=[...]`）。
+**不改任何 SDK 文件**：不写 switch case、不碰 detect.ts、不改报告形状。

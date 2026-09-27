@@ -1,5 +1,7 @@
 import { BaseTracker } from "../../core/api/tracker";
 import type { EventRecorder } from "../../core/api/tracker";
+import type { AnalyticsPlugin } from "../../core/api/plugin";
+import { hasDom } from "../../core/dom";
 
 export class PageTracker extends BaseTracker {
 
@@ -97,3 +99,20 @@ export class PageTracker extends BaseTracker {
   };
 
 }
+
+/**
+ * The registry descriptor for this probe.
+ *
+ * The constructor reads `window.location` at field-init time, so
+ * `available()` gates it to runtimes with a DOM — a server never
+ * gets a page probe, and `init()` no longer throws there.
+ */
+export const pageAdapter: AnalyticsPlugin = {
+  name: "page",
+  available: () => hasDom(),
+  start(host) {
+    const tracker = new PageTracker(host);
+    tracker.start();
+    host.registerTracker(tracker);
+  },
+};

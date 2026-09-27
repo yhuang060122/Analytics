@@ -22,11 +22,23 @@
  * parsing is done (script injected later,AMD loader, bookmark-
  * let) it installs right away instead.
  */
-import { init, registerDetectedAdapters } from "./adapters";
-import type { InitOptions } from "./adapters";
+import {
+  init,
+  registerAdapter,
+  registerDetectedAdapters,
+} from "./adapters";
+import type { Adapter, InitOptions } from "./adapters";
 
 /** The global a script tag configures through. */
 const OPTIONS_KEY = "analyticsOptions";
+
+/**
+ * Third-party adapters a script tag can register, in the same
+ * way it passes `analyticsOptions`. Because a `<script>` cannot
+ * `import`, this array is the one discovery hook that works for
+ * it; everyone else calls `registerAdapter()` directly.
+ */
+const ADAPTERS_KEY = "analyticsAdapters";
 
 /**
  * Never missing, just sometimes absent: a script tag may run
@@ -45,6 +57,22 @@ function readOptions(scope: Record<string, unknown>): InitOptions | undefined {
   if (!options || typeof options !== "object") return undefined;
 
   return options as InitOptions;
+}
+
+function registerFromGlobal(scope: Record<string, unknown>): void {
+  const adapters = scope[ADAPTERS_KEY];
+
+  if (!Array.isArray(adapters)) return;
+
+  for (const adapter of adapters) {
+    if (
+      adapter &&
+      typeof adapter === "object" &&
+      typeof (adapter as Adapter).name === "string"
+    ) {
+      registerAdapter(adapter as Adapter);
+    }
+  }
 }
 
 function installFromGlobal(): void {
@@ -69,6 +97,7 @@ function installFromGlobal(): void {
   // Both are idempotent, so loading this script twice — or
   // alongside an app that already called `init()` — is safe:
   // one instance, one set of probes.
+  registerFromGlobal(scope);
   void registerDetectedAdapters(init(options));
 }
 

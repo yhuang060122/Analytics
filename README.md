@@ -65,6 +65,7 @@ analytics/
     angular/                 HttpClient interceptor
     detect.ts                runtime feature detection
     page-context.ts          where the event happened; SSR-safe
+    registry.ts              name -> adapter table (discovery)
     index.ts                 init() — the composition root
   index.ts                   public barrel
   iife.ts                    <script> build entry — side effects
@@ -156,10 +157,13 @@ same way in both entry points:
 | `network: false` | network tracking off entirely |
 | `network: { fetch: false }` | that transport off |
 | `frameworks: { fetch: false }` | force off, wins over `network` |
+| `adapters: { fetch: false }` | per-adapter, wins over everything above |
 
 `init()` and `registerDetectedAdapters()` share one resolver, so
 `init({ network: { fetch: false } })` cannot install the adapter
-through one path and skip it through the other.
+through one path and skip it through the other. The general form is
+`adapters: { <name>: <boolean | options> }`, which is also how a
+third-party adapter is configured — see [Adapters as plugins](#adapters-as-plugins).
 
 If you build the SDK yourself instead of calling `init()`, the
 sync half is public too:
@@ -202,6 +206,82 @@ detectEnvironment();
 // { fetch: true, jquery: false, angularjs: false,
 //   angularDevMode: false, dom: true }
 ```
+
+## Adapters as plugins
+
+Every built-in adapter — click, page, fetch, jQuery, Angular — is a
+*plugin* now: a descriptor sitting in one registry
+(`adapters/registry.ts`), implementing one contract
+(`core/api/plugin.ts`). `init()` no longer carries a switch table of
+names; it installs whatever is registered. That is what makes a
+third-party adapter possible without touching the SDK.
+
+The contract has two roles, because only one of them can be started
+by us:
+
+```ts
+import type { AnalyticsPlugin } from "analytics";
+
+export const vueRouter: AnalyticsPlugin<{ routes: unknown }> = {
+  name: "vue-router",
+
+  available: () => typeof router !== "undefined",
+
+  start(host, options) {
+    const off = options.routes.afterEach(to => host.page(to.fullPath));
+    host.registerTracker({ start: () => {}, stop: off });
+  },
+};
+```
+
+- `name` — identity, and the config key it is addressed by.
+- `available?(host)` — whether the runtime supports it. Detection is
+  per-adapter on purpose: it used to be a switch table that had to be
+  kept in sync with the adapter, so adding a transport meant editing a
+  second file that had to agree with the first.
+- `start(host, options)` — install. `host` is a `PluginHost`: it
+  records events (`track` / `page`), registers trackers for teardown,
+  and exposes `debug`.
+- `stop?()` — release anything `start()` took that is not already a
+  registered tracker.
+
+`AdapterIntegration` is the second role, for adapters the *app*
+drives. An HTTP interceptor cannot attach itself to `HttpClient`, so
+there is nothing to start — it exposes `create(host)` instead of a
+lifecycle, and reports as `manual`. The Angular adapter is the
+built-in example.
+
+**Register** one of three ways — `registerAdapter(plugin)` before
+`init()`, `init({ plugins: [plugin] })`, or, from a `<script>`,
+`window.analyticsAdapters = [plugin]`:
+
+```ts
+import { registerAdapter, init } from "analytics/adapters";
+
+registerAdapter(vueRouter);
+
+const analytics = init({
+  endpoint: "/api/analytics/events",
+  adapters: { "vue-router": { routes: router } },
+});
+```
+
+**Configure** with `adapters.<name>`: `false` disables it, an object
+becomes its options. The legacy switches (`network`, `frameworks`,
+`autoTrack`) stay as aliases. Precedence, most specific first:
+`adapters.*` → `frameworks.*` / `autoTrack.*` → `network.*` →
+`network: false` → on.
+
+**Inspect** with `listAdapters()`, `getAdapter(name)`, and the report
+from `installAdapters()` / `registerDetectedAdapters()` — its
+`adapters` map has one entry per registered adapter
+(`registered` / `skipped` / `unavailable` / `manual`), while
+`fetch` / `jquery` / `angular` stay at the top level for the old
+callers.
+
+A new adapter's footprint is **one file** (descriptor + logic) plus
+one `registerAdapter(...)` call in the host app. No SDK file changes:
+no case added to a switch, no `detect.ts` entry, no report shape.
 
 ## jQuery project
 

@@ -1,5 +1,7 @@
 import { BaseTracker } from "../../core/api/tracker";
 import type { EventRecorder } from "../../core/api/tracker";
+import type { AnalyticsPlugin } from "../../core/api/plugin";
+import { hasDom } from "../../core/dom";
 import { readPageContext } from "../page-context";
 
 export interface ClickTrackerOptions {
@@ -101,3 +103,20 @@ export class ClickTracker extends BaseTracker {
   };
 
 }
+
+/**
+ * The registry descriptor for this probe.
+ *
+ * `available()` says "only where there is a DOM" — the probe's
+ * constructor reads `document`, so on a server it must never be
+ * offered, let alone started.
+ */
+export const clickAdapter: AnalyticsPlugin<ClickTrackerOptions> = {
+  name: "click",
+  available: () => hasDom(),
+  start(host, options) {
+    const tracker = new ClickTracker(host, options);
+    tracker.start();
+    host.registerTracker(tracker);
+  },
+};

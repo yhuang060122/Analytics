@@ -3,6 +3,6 @@
   "private": true,
   "version": "0.0.0",
   "scripts": {
-    "test": "node ../demo/node_modules/typescript/bin/tsc -p tsconfig.build.json && node --test tracker-port.test.mjs registry.test.mjs queue.test.mjs debug-plugin.test.mjs architecture.test.mjs network.test.mjs robustness.test.mjs"
+    "test": "node ../demo/node_modules/typescript/bin/tsc -p tsconfig.build.json && node --test tracker-port.test.mjs registry.test.mjs queue.test.mjs debug-plugin.test.mjs architecture.test.mjs network.test.mjs robustness.test.mjs adapter-plugin.test.mjs"
   }
 }
