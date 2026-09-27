@@ -1,2 +1,2 @@
 export * from "./destination";
-export * from "./http.destination";
+export * from "./http-destination";

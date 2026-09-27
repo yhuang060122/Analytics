@@ -5,17 +5,6 @@ import {
   type NetworkTrackerOptions,
 } from "../network/network-core";
 
-export interface FetchTrackerOptions extends NetworkTrackerOptions {
-  /**
-   * URLs that should not be tracked.
-   * Example:
-   * ["/internal/health"]
-   *
-   * Merged with the built-in ignore list, never replaces it.
-   */
-  ignoreUrls?: string[];
-}
-
 export class FetchTracker extends BaseTracker {
   private originalFetch?: typeof window.fetch;
 
@@ -23,7 +12,7 @@ export class FetchTracker extends BaseTracker {
 
   constructor(
     recorder: EventRecorder,
-    options: FetchTrackerOptions = {},
+    options: NetworkTrackerOptions = {},
   ) {
     super();
 

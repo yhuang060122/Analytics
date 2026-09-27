@@ -1,5 +1,6 @@
 import { BaseTracker } from "../../core/api/tracker";
 import type { EventRecorder } from "../../core/api/tracker";
+import { readPageContext } from "../page-context";
 
 export interface ClickTrackerOptions {
   /**
@@ -8,6 +9,18 @@ export interface ClickTrackerOptions {
    */
   attribute?: string;
 }
+
+/**
+ * Marks an element whose text may be reported.
+ *
+ * `element.textContent` is the one property that routinely
+ * carries personal data — a "Hi Sarah" greeting, a message
+ * preview, a price with the customer's name next to it — so
+ * it is opt-in per element rather than sent for every click.
+ * The key stays present (as null) so the property schema
+ * does not depend on which element was clicked.
+ */
+const TEXT_ATTRIBUTE = "data-analytics-text";
 
 export class ClickTracker extends BaseTracker {
 
@@ -71,8 +84,9 @@ export class ClickTracker extends BaseTracker {
 
         tag: element.tagName,
 
-        text:
-          element.textContent?.trim() ?? null,
+        text: element.hasAttribute(TEXT_ATTRIBUTE)
+          ? element.textContent?.trim() ?? null
+          : null,
 
         id:
           element.id || null,
@@ -80,14 +94,7 @@ export class ClickTracker extends BaseTracker {
         cssClass:
           element.className || null,
 
-        pagePath:
-          window.location.pathname,
-
-        pageUrl:
-          window.location.href,
-
-        pageTitle:
-          document.title,
+        ...readPageContext(),
       }
     );
 

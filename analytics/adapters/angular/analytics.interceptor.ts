@@ -225,12 +225,3 @@ export function createAnalyticsHttpInterceptor(
     },
   };
 }
-
-/**
- * Not a Tracker on purpose: an Angular interceptor cannot
- * attach itself, it has to be provided at bootstrap. Exposed
- * so `init()` can report why nothing was auto-registered.
- */
-export function describeAngularWiring(): string {
-  return "angular: provide the interceptor via HttpClient providers";
-}

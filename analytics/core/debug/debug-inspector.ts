@@ -272,7 +272,11 @@ export class DebugInspector {
     if (event.error) {
 
       const error = document.createElement("div");
-      error.textContent = event.error;
+
+      error.textContent = event.reason
+        ? `[${event.reason}] ${event.error}`
+        : event.error;
+
       error.style.cssText =
         "color:#EF4444;margin-top:4px;word-break:break-word;";
 

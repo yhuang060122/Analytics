@@ -85,6 +85,7 @@ export class EventQueue {
         stage: "failed",
         context: dropped,
         timestamp: Date.now(),
+        reason: "queue-overflow",
         error: "queue overflow",
       });
     }
@@ -226,6 +227,7 @@ export class EventQueue {
         stage: "failed",
         context: ctx,
         timestamp: Date.now(),
+        reason: "undeliverable",
         error: `dropped after ${this.options.maxRetries + 1} attempts: ${String(error)}`,
       })
     );

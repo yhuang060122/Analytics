@@ -129,8 +129,31 @@ test("network core stays framework-agnostic", () => {
 
   assert.deepEqual(
     imports,
-    ["../../core/api/tracker"],
-    "network core may only depend on the core port",
+    ["../../core/api/tracker", "../page-context"],
+    "network core may only depend on the core port and the shared page reader",
+  );
+});
+
+test("page context is read from one module", () => {
+  // The click probe used to spell out pagePath/pageUrl/pageTitle
+  // by hand while the network core read them from a helper, so
+  // the two halves could drift apart. Nothing outside
+  // page-context.ts may carry the full triple.
+  const offenders = walk(adaptersDir)
+    .filter((file) => file.endsWith(".ts"))
+    .filter((file) => !file.endsWith(join("adapters", "page-context.ts")))
+    .filter((file) => {
+      const code = codeOf(file);
+
+      return ["pagePath", "pageUrl", "pageTitle"].every((key) =>
+        new RegExp(`\\b${key}\\b`).test(code),
+      );
+    });
+
+  assert.deepEqual(
+    offenders,
+    [],
+    "import readPageContext() instead of spelling the triple out again",
   );
 });
 

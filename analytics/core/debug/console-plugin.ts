@@ -21,8 +21,14 @@ export function createConsolePlugin(): DebugPlugin {
 
     onEvent(event: DebugEvent): void {
 
+      // The reason rides along on the label: a "failed" event
+      // without it looks exactly like every other failure.
+      const label = event.reason
+        ? `${event.stage.toUpperCase()} · ${event.reason}`
+        : event.stage.toUpperCase();
+
       console.log(
-        `%c${event.stage.toUpperCase()}`,
+        `%c${label}`,
         `color:${STAGE_COLORS[event.stage]};font-weight:bold`,
         event.context.event.name,
         event.context.event.properties

@@ -64,6 +64,7 @@ analytics/
     jquery/                  $.ajax global events
     angular/                 HttpClient interceptor
     detect.ts                runtime feature detection
+    page-context.ts          where the event happened; SSR-safe
     index.ts                 init() — the composition root
   index.ts                   public barrel
   iife.ts                    <script> build entry — side effects
@@ -311,10 +312,21 @@ app calls `$.ajax` directly inside Angular — filter on
 `stop()`/`destroy()`; patch after other libraries that wrap
 fetch, or they will capture each other.
 
-**SSR.** `readPageContext()` returns empty strings instead of
-touching `document`, and jQuery/Angular adapters no-op when their
-framework is absent, so a Node render does not throw. Call
-`init()` from a browser-only entry point anyway.
+**Personal data in clicks.** `Element Clicked` reports
+`element`, `tag`, `id` and `cssClass`, but **not** the element's
+text — `text` is `null` unless the element also carries
+`data-analytics-text`. Element text is the one property that
+routinely carries personal data ("Hi Sarah", a message preview),
+so it is opt-in per element. The key stays present so the
+property schema does not depend on which element was clicked.
+
+**SSR.** `readPageContext()` (`adapters/page-context.ts`, shared by
+every probe) returns empty strings instead of touching `document`,
+and jQuery/Angular adapters no-op when their framework is absent,
+so a Node render does not throw. It is the probes' own wiring that
+is browser-only — `new Analytics()` still registers
+`visibilitychange` / `beforeunload` listeners — so call `init()`
+from a browser-only entry point anyway.
 
 ## Delivery & teardown
 
@@ -386,6 +398,11 @@ off(); // or: analytics.debug.unregisterDebugPlugin("datadog")
   SDK.
 - Plugins receive nothing while `debug.enabled` is false —
   `emit()` short-circuits before the bus.
+- A `failed` event carries `reason` next to the free-form
+  `error`: `queue-overflow` (dropped before it was ever sent),
+  `undeliverable` (the SDK stopped retrying) and
+  `transport-error` (the request itself failed). Match on
+  `reason`, not on the message text.
 - `analytics.debug.debugPlugins` lists the attached names.
 
 The two built-ins are plugins too, installed by name:

@@ -70,6 +70,7 @@ export class HttpDestination implements Destination {
           stage: "failed",
           context: ctx,
           timestamp: Date.now(),
+          reason: "transport-error",
           error: String(error),
         })
       );

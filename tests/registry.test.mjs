@@ -78,7 +78,7 @@ test("startAutoTrack wires probes and destroy() tears them down", () => {
   };
 
   analytics.registerTracker(
-    startAutoTrack(analytics, { page: true, click: true, api: false }),
+    startAutoTrack(analytics, { page: true, click: true }),
   );
 
   assert.equal(env.count("doc", "click") - before.click, 1);
@@ -102,7 +102,7 @@ test("destroy() is idempotent and silences the instance", () => {
 
   const analytics = new Analytics(config);
   analytics.registerTracker(
-    startAutoTrack(analytics, { page: false, click: true, api: false }),
+    startAutoTrack(analytics, { page: false, click: true }),
   );
 
   analytics.destroy();
@@ -141,7 +141,7 @@ test("createBrowserAnalytics keeps the legacy autoTrack config working", () => {
 
   const analytics = createBrowserAnalytics({
     ...config,
-    autoTrack: { click: true, page: false, api: false },
+    autoTrack: { click: true, page: false },
   });
 
   assert.equal(env.count("doc", "click"), 1);
@@ -159,7 +159,7 @@ test("event pipeline is unchanged: click -> queued -> flushing -> sent", async (
     debug: { enabled: true },
   });
   analytics.registerTracker(
-    startAutoTrack(analytics, { page: false, click: true, api: false }),
+    startAutoTrack(analytics, { page: false, click: true }),
   );
 
   const stages = [];
@@ -169,6 +169,7 @@ test("event pipeline is unchanged: click -> queued -> flushing -> sent", async (
 
   const element = {
     getAttribute: () => "Buy NVDA",
+    hasAttribute: () => false,
     tagName: "BUTTON",
     textContent: "Buy",
     id: "buyBtn",
@@ -189,6 +190,13 @@ test("event pipeline is unchanged: click -> queued -> flushing -> sent", async (
 
   assert.equal(env.batches.length, 1);
   assert.equal(env.batches[0].events[0].event.name, "Element Clicked");
+
+  // The page triple comes from the shared reader, not from the
+  // probe reading window/document by hand.
+  assert.equal(
+    env.batches[0].events[0].event.properties.pagePath,
+    "/p",
+  );
 
   analytics.destroy();
 });

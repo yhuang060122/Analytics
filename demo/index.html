@@ -40,10 +40,13 @@
         <p data-page-node-id="G3oAmHBQwri1LKARER3hzw">
           Clicking any element with a
           <code data-page-node-id="MDHuQOmiYlvzQNTvxFY4uG">data-analytics</code> attribute makes
-          ClickTracker report Element Clicked.
+          ClickTracker report Element Clicked. The element's text is
+          <b>not</b> reported unless it also carries
+          <code>data-analytics-text</code> — that text is the one
+          property that regularly contains personal data.
         </p>
         <div class="row" data-page-node-id="KttfgENY3b6vmSGXh2SmYe">
-          <button class="btn" data-analytics="Primary button A" data-page-node-id="48bnO72W0DEGWgygZ3UyX6">
+          <button class="btn" data-analytics="Primary button A" data-analytics-text data-page-node-id="48bnO72W0DEGWgygZ3UyX6">
             Primary button A
           </button>
           <button class="btn ghost" data-analytics="Secondary button B" data-page-node-id="Ae8ZMEbYC6FnCIaf9NAvCb">

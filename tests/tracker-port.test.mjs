@@ -30,6 +30,8 @@ test("ClickTracker works against a bare EventRecorder (no Analytics)", () => {
 
   const element = {
     getAttribute: () => "Buy NVDA",
+    // Opted in, so its text is reported.
+    hasAttribute: (name) => name === "data-analytics-text",
     tagName: "BUTTON",
     textContent: " Buy ",
     id: "buyBtn",
@@ -44,9 +46,42 @@ test("ClickTracker works against a bare EventRecorder (no Analytics)", () => {
   assert.equal(recorder.calls[0].name, "Element Clicked");
   assert.equal(recorder.calls[0].properties.element, "Buy NVDA");
   assert.equal(recorder.calls[0].properties.text, "Buy");
+  assert.equal(recorder.calls[0].properties.pagePath, "/p");
 
   tracker.stop();
   assert.equal(env.count("doc", "click"), 0);
+});
+
+test("click text is opt-in: no attribute, no textContent", () => {
+  const recorder = fakeRecorder();
+  const tracker = new ClickTracker(recorder);
+
+  tracker.start();
+
+  env.fire("doc", "click", {
+    target: {
+      closest: () => ({
+        getAttribute: () => "Buy NVDA",
+        hasAttribute: () => false,
+        tagName: "BUTTON",
+        textContent: " Buy Sarah's order ",
+        id: "buyBtn",
+        className: "btn",
+      }),
+    },
+  });
+
+  const properties = recorder.calls[0].properties;
+
+  // The key stays so the schema does not depend on the element.
+  assert.equal(properties.text, null);
+  assert.equal(
+    JSON.stringify(properties).includes("Sarah"),
+    false,
+    "element text must not leave the page unless it is opted in",
+  );
+
+  tracker.stop();
 });
 
 test("ClickTracker.start() is idempotent", () => {

@@ -5,7 +5,7 @@ import { installBrowser, sleep } from "./browser-stub.mjs";
 const env = installBrowser();
 const require = env.require;
 
-const { EventQueue } = require("./.build/core/queue/event.queue.js");
+const { EventQueue } = require("./.build/core/queue/event-queue.js");
 const { DebugController } = require("./.build/core/debug/debug-controller.js");
 const { Analytics } = require("./.build/core/api/analytics.js");
 
@@ -45,9 +45,12 @@ const flaky = (failTimes, sent = []) => {
 const queueWith = (destination, options = {}) => {
   const debug = new DebugController({ enabled: true });
   const stages = [];
-  debug.bus.subscribe((e) =>
-    stages.push(`${e.stage}:${e.context.event.name}`),
-  );
+  const reasons = [];
+
+  debug.bus.subscribe((e) => {
+    stages.push(`${e.stage}:${e.context.event.name}`);
+    if (e.reason) reasons.push(e.reason);
+  });
 
   const queue = new EventQueue(destination, debug, {
     batchSize: 100,
@@ -56,7 +59,7 @@ const queueWith = (destination, options = {}) => {
     ...options,
   });
 
-  return { queue, stages };
+  return { queue, stages, reasons };
 };
 
 test("a failed batch stays buffered and is retried", async () => {
@@ -86,7 +89,7 @@ test("events are dropped only once the retry budget is spent", async () => {
   env.reset();
 
   const destination = flaky(999);
-  const { queue, stages } = queueWith(destination, { maxRetries: 2 });
+  const { queue, stages, reasons } = queueWith(destination, { maxRetries: 2 });
 
   queue.enqueue(ctx("A"));
 
@@ -104,6 +107,8 @@ test("events are dropped only once the retry budget is spent", async () => {
 
   const failures = stages.filter((s) => s.startsWith("failed:"));
   assert.equal(failures.length, 1, "exactly one terminal failure is reported");
+
+  assert.equal(reasons.at(-1), "undeliverable");
 
   queue.stop();
 });
@@ -129,7 +134,7 @@ test("a full queue drops the oldest event instead of growing forever", () => {
   env.reset();
 
   const destination = flaky(0);
-  const { queue, stages } = queueWith(destination, {
+  const { queue, stages, reasons } = queueWith(destination, {
     maxQueueSize: 3,
     maxRetries: 0,
   });
@@ -142,6 +147,11 @@ test("a full queue drops the oldest event instead of growing forever", () => {
   assert.equal(queue.size, 3);
   assert.equal(stages.includes("failed:A"), true, "A was dropped");
   assert.equal(stages.includes("queued:D"), true, "D was kept");
+
+  // Overflow is a drop, not a request failure: it never left
+  // the buffer, and a dashboard must be able to tell the two
+  // apart without parsing the error string.
+  assert.deepEqual(reasons, ["queue-overflow"]);
 
   queue.stop();
 });
@@ -188,6 +198,44 @@ test("close() flushes and never rejects when the endpoint is dead", async () => 
   assert.equal(analytics.retrying, false, "the retry timer must be cleared");
 
   globalThis.fetch = originalFetch;
+});
+
+test("a transport failure is tagged transport-error", async () => {
+  env.reset();
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    throw new Error("network down");
+  };
+
+  const analytics = new Analytics({
+    endpoint: "/api/analytics/events",
+    batchSize: 100,
+    flushInterval: 100000,
+    retryDelay: 5,
+    maxRetries: 0,
+    debug: { enabled: true },
+  });
+
+  const seen = [];
+  analytics.debug.bus.subscribe((e) => seen.push(e));
+
+  analytics.track("Lost Event");
+  await analytics.flush();
+
+  // Two "failed" events for one loss, and that is the point:
+  // the transport one says *why* the request failed, the
+  // queue one says the batch was dropped. They used to be
+  // indistinguishable without reading the message.
+  const failures = seen.filter((e) => e.stage === "failed");
+
+  assert.deepEqual(
+    failures.map((e) => e.reason),
+    ["transport-error", "undeliverable"],
+  );
+
+  globalThis.fetch = originalFetch;
+  analytics.destroy();
 });
 
 test("a hidden tab after teardown does not flush", async () => {

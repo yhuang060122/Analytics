@@ -1,1 +1,1 @@
-export * from "./event.queue";
+export * from "./event-queue";

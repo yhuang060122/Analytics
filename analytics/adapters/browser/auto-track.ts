@@ -2,13 +2,21 @@ import { Analytics } from "../../core/api/analytics";
 import type { AnalyticsConfig } from "../../core/api/config";
 import type { EventRecorder, Tracker } from "../../core/api/tracker";
 import { ClickTracker } from "./click-tracker";
-import { FetchTracker } from "./fetch-tracker";
 import { PageTracker } from "./page-tracker";
 
+/**
+ * Which DOM probes to wire.
+ *
+ * Network tracking is deliberately absent: it is a second,
+ * overlapping switch (`network.fetch` / `frameworks.*`) that
+ * `init()` and `registerDetectedAdapters()` own. Having both
+ * meant `startAutoTrack({ api: true })` could install a fetch
+ * probe behind the composition root's back, with no record of
+ * it in `InstallState`.
+ */
 export interface AutoTrackOptions {
   page?: boolean;
   click?: boolean;
-  api?: boolean;
 }
 
 /**
@@ -30,10 +38,6 @@ export function startAutoTrack(
 
   if (options.click ?? true) {
     trackers.push(new ClickTracker(recorder));
-  }
-
-  if (options.api ?? false) {
-    trackers.push(new FetchTracker(recorder));
   }
 
   trackers.forEach(tracker => tracker.start());

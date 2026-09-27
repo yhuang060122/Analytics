@@ -1,6 +1,7 @@
 // adapters/network/network-core.ts
 
 import type { EventRecorder } from "../../core/api/tracker";
+import { readPageContext } from "../page-context";
 
 /**
  * Which technology produced the request.
@@ -61,30 +62,6 @@ export const NETWORK_ERROR_EVENT = "API Error";
 export const DEFAULT_IGNORE_URLS: readonly string[] = [
   "/api/analytics/events",
 ];
-
-export interface PageContext {
-  pagePath: string;
-  pageUrl: string;
-  pageTitle: string;
-}
-
-/**
- * Reads the page context without assuming a browser.
- * Returns empty strings during SSR so a server render
- * never throws and never ships a fake URL.
- */
-export function readPageContext(): PageContext {
-  const scope = typeof globalThis !== "undefined" ? globalThis : undefined;
-
-  const location = (scope as { location?: Location } | undefined)?.location;
-  const doc = (scope as { document?: Document } | undefined)?.document;
-
-  return {
-    pagePath: location?.pathname ?? "",
-    pageUrl: location?.href ?? "",
-    pageTitle: doc?.title ?? "",
-  };
-}
 
 /**
  * Framework-agnostic half of every network adapter.

@@ -33,6 +33,12 @@ export function installBrowser(fetchImpl) {
     location: { pathname: "/p", href: "http://x/p", search: "" },
   });
 
+  // In a browser window *is* the global object, so a reader
+  // that goes through globalThis (readPageContext) has to see
+  // the same location. Without this the page triple comes back
+  // empty and a probe reading the page by hand would look fine.
+  globalThis.location = globalThis.window.location;
+
   /**
    * Just enough DOM for DebugInspector to build its panel:
    * createElement + body.appendChild + the handful of
