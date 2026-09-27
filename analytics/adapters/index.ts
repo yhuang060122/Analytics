@@ -64,33 +64,58 @@ export interface AdapterReport {
 }
 
 /**
- * The single instance created by `init()`.
+ * The result of `init()`, kept until `reset()` tears it down.
  *
- * Held module-level so a script tag included twice, or an app
- * that calls `init()` from two entry points, still ends up
- * with one SDK and one set of probes.
+ * Named after its lifecycle: `init()` installs the SDK, `reset()`
+ * uninstalls it. `installed.instance` reads as "the instance the
+ * SDK has been installed with" and `reset()` reads as "go back
+ * to never having been installed".
+ *
+ * It used to be three separate declarations, which meant every
+ * new piece needed a matching line in `reset()` — forget one
+ * and a hot reload would come back half-initialised. One object
+ * lets `reset()` drop it in a single assignment.
  */
-let instance: Analytics | undefined;
+interface InstallState {
 
-/**
- * Which network adapters are live right now.
- *
- * Needed because these adapters patch globals. Registering a
- * second FetchTracker would capture the *already patched*
- * fetch as its "original", so one request would emit two
- * `API Request` events. The bookkeeping makes every register
- * call idempotent instead.
- */
-const live: { fetch?: Tracker; jquery?: Tracker } = {};
+  /**
+   * The single instance created by `init()`.
+   *
+   * Held module-level so a script tag included twice, or an app
+   * that calls `init()` from two entry points, still ends up
+   * with one SDK and one set of probes.
+   */
+  instance?: Analytics;
 
-/**
- * The framework options `init()` was called with.
- *
- * So `registerDetectedAdapters()` with no arguments finishes
- * what init would have done, instead of silently ignoring
- * `network: false` and re-enabling everything.
- */
-let lastOptions: FrameworkOptions = {};
+  /**
+   * The network adapters that are live right now.
+   *
+   * Needed because these adapters patch globals. Registering a
+   * second FetchTracker would capture the *already patched*
+   * fetch as its "original", so one request would emit two
+   * `API Request` events. The bookkeeping makes every register
+   * call idempotent instead.
+   */
+  fetchTracker?: Tracker;
+  jqueryTracker?: Tracker;
+
+  /**
+   * The framework options `init()` was called with.
+   *
+   * So `registerDetectedAdapters()` with no arguments finishes
+   * what init would have done, instead of silently ignoring
+   * `network: false` and re-enabling everything.
+   */
+  lastOptions: FrameworkOptions;
+}
+
+function emptyInstall(): InstallState {
+  return {
+    lastOptions: {},
+  };
+}
+
+let installed: InstallState = emptyInstall();
 
 /**
  * Composition root. Creates the SDK, starts what the current
@@ -101,8 +126,8 @@ let lastOptions: FrameworkOptions = {};
  * probes (which would double every event).
  */
 export function init(options: InitOptions): Analytics {
-  if (instance) {
-    return instance;
+  if (installed.instance) {
+    return installed.instance;
   }
 
   const config: BrowserAnalyticsConfig = {
@@ -110,7 +135,7 @@ export function init(options: InitOptions): Analytics {
     ...options,
   };
 
-  lastOptions = {
+  installed.lastOptions = {
     network: options.network,
     frameworks: options.frameworks,
   };
@@ -130,26 +155,26 @@ export function init(options: InitOptions): Analytics {
 
   exposeGlobal(analytics, options.globalName);
 
-  instance = analytics;
+  installed.instance = analytics;
 
   return analytics;
 }
 
 /** The instance created by `init()`, if any. */
 export function getAnalytics(): Analytics | undefined {
-  return instance;
+  return installed.instance;
 }
 
 /**
  * Tears the singleton down. Mostly for tests and for SPA
  * hot-reload, where a second `init()` must be able to run.
+ *
+ * One assignment, so no future field can be left behind.
  */
 export function reset(): void {
-  instance?.destroy();
-  instance = undefined;
+  installed.instance?.destroy();
 
-  live.fetch = undefined;
-  live.jquery = undefined;
+  installed = emptyInstall();
 
   clearActiveRecorder();
 }
@@ -169,7 +194,7 @@ export function registerFetchAdapter(
   analytics: Analytics,
   options?: NetworkTrackerOptions,
 ): boolean {
-  if (live.fetch) return true;
+  if (installed.fetchTracker) return true;
 
   if (!isFetchAvailable()) return false;
 
@@ -178,7 +203,7 @@ export function registerFetchAdapter(
   tracker.start();
   analytics.registerTracker(tracker);
 
-  live.fetch = tracker;
+  installed.fetchTracker = tracker;
 
   return true;
 }
@@ -192,7 +217,7 @@ export function registerFetchAdapter(
  * report says so instead of silently doing nothing.
  */
 export async function registerDetectedAdapters(
-  analytics: Analytics = instance!,
+  analytics: Analytics = installed.instance!,
   options: FrameworkOptions = {},
 ): Promise<AdapterReport> {
   const report: AdapterReport = {
@@ -203,7 +228,7 @@ export async function registerDetectedAdapters(
 
   // Explicit arguments win, init()'s config is the fallback.
   const merged: FrameworkOptions = {
-    ...lastOptions,
+    ...installed.lastOptions,
     ...options,
   };
 
@@ -224,7 +249,7 @@ export async function registerDetectedAdapters(
   // ---- jQuery ----
   const wantsJquery = merged.frameworks?.jquery ?? true;
 
-  if (live.jquery) {
+  if (installed.jqueryTracker) {
     report.jquery = "registered";
   } else if (!wantsJquery || merged.network === false) {
     report.jquery = isJQueryAvailable() ? "skipped" : "unavailable";
@@ -236,7 +261,7 @@ export async function registerDetectedAdapters(
     tracker.start();
     analytics.registerTracker(tracker);
 
-    live.jquery = tracker;
+    installed.jqueryTracker = tracker;
 
     report.jquery = "registered";
   }

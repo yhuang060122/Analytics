@@ -329,6 +329,26 @@ test("network event names come from one place", () => {
   );
 });
 
+test("the composition root keeps its state in one object", () => {
+  // Three separate module-level declarations used to mean three
+  // matching lines in `reset()`; miss one and a hot reload came
+  // back half-initialised. One `let` means one assignment.
+  const source = codeOf(join(adaptersDir, "index.ts"));
+
+  const mutable = [...source.matchAll(/^let\s+(\w+)/gm)].map(
+    (match) => match[1],
+  );
+
+  // Deliberately not asserting the name: renaming it does not
+  // weaken the invariant, and a hardcoded name would fail a
+  // rename for no reason.
+  assert.equal(
+    mutable.length,
+    1,
+    `module-level mutable state must live in a single object so reset() can drop it at once, found: ${mutable.join(", ")}`,
+  );
+});
+
 test("types are imported with import type", () => {
   // The SDK builds to CommonJS, so `verbatimModuleSyntax` (which
   // would catch this at compile time) cannot be enabled here —
