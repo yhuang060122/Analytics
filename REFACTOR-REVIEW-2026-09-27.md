@@ -205,3 +205,40 @@ probe.track(name, props)
 顺带修的测试盲点：`browser-stub.mjs` 只把 `location` 挂在 `window` 上，而 `readPageContext()` 读的是 `globalThis`（浏览器里二者是同一个对象）—— 桩现在也暴露 `globalThis.location`，否则"探针手写 page triple"和"调 reader"在测试里长得一样，都返回空串。
 
 验证：`npm --prefix tests run test` **72/72**（新增 3 条：click text opt-in、transport-error 打标、network-core 依赖面）；demo 严格 tsc 0 错；`npm --prefix build run build` 产出不变。
+
+---
+
+## 9. P1 执行情况（同日，一次提交 `da76b8c`）
+
+| 项 | 做了什么 |
+|---|---|
+| #5 `init()` 忽略 `network.fetch:false` | 抽出单一 `resolveAdapters(options)`，`init()` 与 `registerDetectedAdapters()` 共用。语义：`network:false` 整体关闭；`network.fetch` / `network.jquery` 是默认值；`frameworks.*` 强制覆盖二者。补 2 条 option 矩阵回归测试（6 种组合 × 两个入口 + 空参数继承 init 配置） |
+| #6 默认 recorder 静默 NOOP | Angular 拦截器 `resolveRecorder()` 拿不到实例时 **warn once**，说明边界（把实例传给 `createAnalyticsInterceptor()`，或先 `init()`），不抛错 |
+| #7 `close()` 可能在缓冲区非空时 resolve | `EventQueue` 把 `flushing` 布尔换成 `inFlight?: Promise<void>`，`flush()` 不再 async、原样交回正在跑的承诺；循环体挪进 `drain()`。并发 `flush()` 现在拿到同一个 promise |
+| #8 Inspector 每事件重建 ~150 节点 | 改为增量前插（`insertBefore(firstChild)`，超过 `MAX_ROWS=30` 裁尾）+ rAF 合并一帧内的突发；`visible()` 为 false（折叠 / `document.hidden`）时只进缓冲不渲染，展开时整体重建。无 rAF 环境（SSR、node 测试）立即渲染 |
+| #9 `PageTracker.navigate()` 死代码 | 删除（全仓零引用）。SPA 用法写进 README：路由里直接 `analytics.page(path)` |
+| #10 测试覆盖 | 新增 `tests/robustness.test.mjs`：SSR 构造/销毁、并发 `flush()` 共用一个请求、`close()` 排空缓冲区、`EventFactory` 事件形状、`Session` 复用与 reset、`HttpDestination` 头部/body/keepalive/transport-error 打标 |
+| #11 README 与实现漂移 | 新增 `core/dom.ts` 的 `hasDom()`，`Analytics` 的 `visibilitychange`/`beforeunload` 与队列的 `online` 监听都在无 DOM 时跳过；README 的 SSR 段按实现重写。`autoTrack` 的 "deprecated shim" 注释与事实相反（它是 `init()` 默认 `{page:true,click:true}` 的唯一通路），改为说明它是 adapter 层的正式开关 |
+
+### 一个必须记下的坑：桩比被测系统更宽容（第二次）
+
+加 `resolveAdapters()` 后 3 条 network 测试立刻变红。第一反应是"新 resolver 错了"，
+实际是我把 `network: undefined`（未配置 → 走默认开启）和 `network: false`（整体关闭）
+合并成了同一个分支。**桩没有暴露这个问题**：测试里 `globalThis.window.fetch` 是手
+工赋值的，而 `isFetchAvailable()` 读的是全局 fetch，所以"该装没装"和"运行时没有 fetch"
+在测试里长得一样。修的是实现不是测试。
+
+### 4 条 P0 用例现在以 `todo` 形式存在
+
+`robustness.test.mjs` 里这四条断言的是**目标行为**，当前是红的：
+
+- 非安全上下文（无 `crypto.randomUUID`）
+- `sessionStorage` 被禁用
+- debug 插件抛错
+- 请求永久挂起（无超时）
+
+用 `node:test` 的 `{ todo: true }`：失败不计入 `fail`、退出码仍为 0，但 `# todo 4`
+会一直挂在汇总里。P0 落地后把这 4 处的 `todo` 去掉即可转绿——不需要重写断言。
+
+验证：86 个用例 **82 pass / 0 fail / 4 todo**；demo 严格 tsc 0 错；
+`npm --prefix build run build` 两个产物均可产出（`outDir` 仍是 `../dist`）。
