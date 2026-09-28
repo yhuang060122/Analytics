@@ -2,7 +2,6 @@
 
 import type { EventRecorder } from "../../core/api/tracker";
 import { warnOnce } from "../../core/warn";
-import { getActiveRecorder } from "../network/active-recorder";
 import {
   NetworkTrackerCore,
   type NetworkTrackerOptions,
@@ -134,12 +133,12 @@ function spy<T>(
 /**
  * The recorder this interceptor reports to.
  *
- * Falls back to the one `init()` stored, which is how a
- * script-tag install reaches Angular. When there is none the
- * interceptor still works — it forwards the request untouched
- * — but every event would go nowhere, so it says so instead
- * of failing silently. It must not throw: an interceptor that
- * throws at bootstrap takes the whole app down.
+ * There is no implicit fallback: the instance is passed in
+ * explicitly via `createAnalyticsInterceptor(analytics)`. When
+ * there is none the interceptor still works — it forwards the
+ * request untouched — but every event would go nowhere, so it
+ * says so instead of failing silently. It must not throw: an
+ * interceptor that throws at bootstrap takes the whole app down.
  *
  * Once, not per request: the missing recorder is a wiring
  * mistake, and a page firing it on every HTTP call would bury
@@ -148,18 +147,15 @@ function spy<T>(
 function resolveRecorder(
   recorder?: EventRecorder,
 ): EventRecorder | undefined {
-  const resolved = recorder ?? getActiveRecorder();
-
-  if (!resolved) {
+  if (!recorder) {
     warnOnce(
       "no-recorder",
       "no recorder: pass the Analytics instance to " +
-        "createAnalyticsInterceptor(analytics), or call init() " +
-        "before providing it. Events are being dropped.",
+        "createAnalyticsInterceptor(analytics). Events are being dropped.",
     );
   }
 
-  return resolved;
+  return recorder;
 }
 
 const NOOP_RECORDER: EventRecorder = {

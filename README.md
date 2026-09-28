@@ -84,7 +84,7 @@ so the whole pipeline can be exercised end to end:
 analytics/                  the SDK itself
   core/                     framework-agnostic engine — never imports adapters/
     api/                    ports & the SDK: Analytics, EventRecorder/Tracker
-                            (tracker.ts), the adapter plugin contract (plugin.ts)
+                            (tracker.ts)
     domain/                 event / context / session / id (id.ts holds the
                             crypto → getRandomValues → Math.random fallback)
     factory/                EventFactory: track()/page() → AnalyticsContext
@@ -96,16 +96,12 @@ analytics/                  the SDK itself
     dom.ts                  hasDom() guard for construction-time DOM access
     warn.ts                 warnOnce() — degrade loudly, exactly once
   adapters/                 probes — depend inward on core/
-    browser/                click-tracker, page-tracker, fetch-tracker,
-                            auto-track.ts (AutoTrackOptions type)
+    browser/                ClickTracker, PageTracker, FetchTracker
     network/                NetworkTrackerCore (shared event names/ignore rule)
-                            + active-recorder.ts (script-tag slot)
     jquery/                 JQueryAjaxTracker ($.ajax global events)
     angular/                createAnalyticsInterceptor (HttpClient)
     detect.ts               runtime feature detection
     page-context.ts         readPageContext() — the one place the page triple comes from
-    registry.ts             name → adapter table (plugin discovery)
-    index.ts                init() — the composition root
   index.ts                  public barrel (framework adapters NOT re-exported)
   iife.ts                   <script> build entry — side effects, self-installs
 
@@ -116,8 +112,9 @@ dist/                       build output (git-ignored)
 ```
 
 The direction that matters: **core never imports adapters.** Adapters
-depend inward on core's ports; wiring happens only in the composition
-root (`adapters/index.ts`). `tests/architecture.test.mjs` enforces
+depend inward on core's ports. Wiring happens in the **composition
+root** — your app — by constructing probes and passing them to
+`analytics.registerTracker()`. `tests/architecture.test.mjs` enforces
 this and a dozen other invariants mechanically.
 
 ---
@@ -145,17 +142,21 @@ core.
 import { Analytics } from "./analytics/core/api/analytics";
 import { PageTracker } from "./analytics/adapters/browser/page-tracker";
 import { ClickTracker } from "./analytics/adapters/browser/click-tracker";
+import { FetchTracker } from "./analytics/adapters/browser/fetch-tracker";
 
 const analytics = new Analytics({ endpoint: "/api/analytics/events" });
 
 const page = new PageTracker(analytics);
 const click = new ClickTracker(analytics);
+const fetch = new FetchTracker(analytics);
 
 page.start();
 click.start();
+fetch.start();
 
 analytics.registerTracker(page);
 analytics.registerTracker(click);
+analytics.registerTracker(fetch);
 ```
 
 `registerTracker()` only registers — starting is the caller's
@@ -187,13 +188,10 @@ analytics/
     network/                 <-- shared network core
       network-core.ts        naming, properties, ignore rule,
                              status classification, transport tag
-      active-recorder.ts     slot for the script-tag flow
     jquery/                  $.ajax global events
     angular/                 HttpClient interceptor
     detect.ts                runtime feature detection
     page-context.ts          where the event happened; SSR-safe
-    registry.ts              name -> adapter table (discovery)
-    index.ts                 init() — the composition root
   index.ts                   public barrel
   iife.ts                    <script> build entry — side effects
 ```
@@ -240,86 +238,66 @@ have let one stack add properties the others do not have.
 
 ## Entry point
 
-```ts
-import { init } from "analytics/adapters";
-
-const analytics = init({
-  endpoint: "/api/analytics/events",
-  batchSize: 20,
-  autoTrack: { page: true, click: true },
-  network: { fetch: true, ignoreUrls: ["/internal/health"] },
-});
-```
-
-`init()` is **synchronous and idempotent** — a second call (or a
-script tag included twice) returns the first instance instead of
-registering a second set of probes, which would double every
-event. `getAnalytics()` reads it back, `reset()` tears it down
-for tests and hot reload.
-
-Adapters that cannot be wired synchronously are opted into
-separately:
-
-```ts
-const report = await registerDetectedAdapters(analytics);
-// { fetch: "registered", jquery: "registered", angular: "manual" }
-```
-
-`angular: "manual"` is not a gap: an HTTP interceptor cannot
-attach itself to `HttpClient`, the app must provide it.
-
-With no arguments it inherits the options `init()` was called
-with, so `init({ network: false })` is not silently undone by a
-later `registerDetectedAdapters()`. Explicit arguments win over
-that fallback. Every value is `registered` / `skipped` /
-`unavailable` (and `manual` for Angular), where `skipped` means
-"present but disabled by config".
-
-Two switches can turn an adapter on or off, and they resolve the
-same way in both entry points:
-
-| Config | Effect |
-| --- | --- |
-| *(absent)* | on, if the runtime has it |
-| `network: false` | network tracking off entirely |
-| `network: { fetch: false }` | that transport off |
-| `frameworks: { fetch: false }` | force off, wins over `network` |
-| `adapters: { fetch: false }` | per-adapter, wins over everything above |
-
-`init()` and `registerDetectedAdapters()` share one resolver, so
-`init({ network: { fetch: false } })` cannot install the adapter
-through one path and skip it through the other. The general form is
-`adapters: { <name>: <boolean | options> }`, which is also how a
-third-party adapter is configured — see [Adapters as plugins](#adapters-as-plugins).
-
-If you build the SDK yourself instead of calling `init()`, the
-sync half is public too:
+There is no `init()` and no auto-detection: you build the SDK and
+wire the probes yourself. Each probe is constructed against the
+instance, started, then registered for teardown:
 
 ```ts
 import { Analytics } from "analytics";
-import { registerFetchAdapter } from "analytics/adapters";
+import { PageTracker } from "analytics/adapters/browser/page-tracker";
+import { ClickTracker } from "analytics/adapters/browser/click-tracker";
+import { FetchTracker } from "analytics/adapters/browser/fetch-tracker";
 
-const analytics = new Analytics({ endpoint: "/api/analytics/events" });
+const analytics = new Analytics({
+  endpoint: "/api/analytics/events",
+  batchSize: 20,
+});
 
-registerFetchAdapter(analytics, { ignoreUrls: ["/health"] });
-// false when window.fetch does not exist (SSR, old browser)
+const page = new PageTracker(analytics);
+const click = new ClickTracker(analytics);
+const fetch = new FetchTracker(analytics, {
+  ignoreUrls: ["/internal/health"],
+});
+
+page.start();
+click.start();
+fetch.start();
+
+analytics.registerTracker(page);
+analytics.registerTracker(click);
+analytics.registerTracker(fetch);
 ```
 
-It is idempotent by design: network adapters patch globals, and
-a second FetchTracker would capture the already-patched fetch as
-its "original", so one request would emit two `API Request`
-events. `registerFetchAdapter` and `registerDetectedAdapters`
-both refuse to stack.
+`registerTracker()` only registers — a probe does nothing until you
+call `.start()`. `destroy()` and `unregisterTracker()` stop probes;
+`await analytics.close()` is the awaitable variant. See
+[Delivery & teardown](#delivery--teardown).
+
+The **available?** question is answered by each probe, not by a
+central detector:
+
+| Probe | Constructor | `available` |
+| --- | --- | --- |
+| `PageTracker` | `new PageTracker(recorder)` | — (reads `window.location`) |
+| `ClickTracker` | `new ClickTracker(recorder, { attribute? })` | — (needs a DOM) |
+| `FetchTracker` | `new FetchTracker(recorder, { ignoreUrls?, normalizeUrl? })` | `window.fetch` exists |
+| `JQueryAjaxTracker` | `new JQueryAjaxTracker(recorder, opts)` | `jQuery`/`$` has `.ajax` |
+
+A probe whose runtime is missing simply stays stopped when you call
+`.start()` — `BaseTracker.canStart()` is the hook. `FetchTracker`
+patches `window.fetch` and restores it on `stop()`/`destroy()`;
+starting it twice does not patch twice.
 
 ### Detection
 
-`detect.ts` inspects the runtime and registers only what exists:
+`detect.ts` is a plain capability reader — it reports what the
+runtime has, it installs nothing:
 
-| Signal | Enables |
+| Signal | Result |
 |---|---|
-| `window.fetch` is a function | fetch adapter |
-| `jQuery` / `$` has `.ajax` | jQuery adapter |
-| `window.angular` / `window.ng` | reports `manual` |
+| `window.fetch` is a function | `fetch: true` |
+| `jQuery` / `$` has `.ajax` | `jquery: true` |
+| `window.angular` / `window.ng` | `angularjs` / `angularDevMode` |
 
 `$.ajax` is the real signal, not the bare `$` global, which
 other libraries also claim. `window.angular` only proves
@@ -334,83 +312,7 @@ detectEnvironment();
 //   angularDevMode: false, dom: true }
 ```
 
-## Adapters as plugins
-
-Every built-in adapter — click, page, fetch, jQuery, Angular — is a
-*plugin* now: a descriptor sitting in one registry
-(`adapters/registry.ts`), implementing one contract
-(`core/api/plugin.ts`). `init()` no longer carries a switch table of
-names; it installs whatever is registered. That is what makes a
-third-party adapter possible without touching the SDK.
-
-The contract has two roles, because only one of them can be started
-by us:
-
-```ts
-import type { AnalyticsPlugin } from "analytics";
-
-export const vueRouter: AnalyticsPlugin<{ routes: unknown }> = {
-  name: "vue-router",
-
-  available: () => typeof router !== "undefined",
-
-  start(host, options) {
-    const off = options.routes.afterEach(to => host.page(to.fullPath));
-    host.registerTracker({ start: () => {}, stop: off });
-  },
-};
-```
-
-- `name` — identity, and the config key it is addressed by.
-- `available?(host)` — whether the runtime supports it. Detection is
-  per-adapter on purpose: it used to be a switch table that had to be
-  kept in sync with the adapter, so adding a transport meant editing a
-  second file that had to agree with the first.
-- `start(host, options)` — install. `host` is a `PluginHost`: it
-  records events (`track` / `page`), registers trackers for teardown,
-  and exposes `debug`.
-- `stop?()` — release anything `start()` took that is not already a
-  registered tracker.
-
-`AdapterIntegration` is the second role, for adapters the *app*
-drives. An HTTP interceptor cannot attach itself to `HttpClient`, so
-there is nothing to start — it exposes `create(host)` instead of a
-lifecycle, and reports as `manual`. The Angular adapter is the
-built-in example.
-
-**Register** one of three ways — `registerAdapter(plugin)` before
-`init()`, `init({ plugins: [plugin] })`, or, from a `<script>`,
-`window.analyticsAdapters = [plugin]`:
-
-```ts
-import { registerAdapter, init } from "analytics/adapters";
-
-registerAdapter(vueRouter);
-
-const analytics = init({
-  endpoint: "/api/analytics/events",
-  adapters: { "vue-router": { routes: router } },
-});
-```
-
-**Configure** with `adapters.<name>`: `false` disables it, an object
-becomes its options. The legacy switches (`network`, `frameworks`,
-`autoTrack`) stay as aliases. Precedence, most specific first:
-`adapters.*` → `frameworks.*` / `autoTrack.*` → `network.*` →
-`network: false` → on.
-
-**Inspect** with `listAdapters()`, `getAdapter(name)`, and the report
-from `installAdapters()` / `registerDetectedAdapters()` — its
-`adapters` map has one entry per registered adapter
-(`registered` / `skipped` / `unavailable` / `manual`), while
-`fetch` / `jquery` / `angular` stay at the top level for the old
-callers.
-
-A new adapter's footprint is **one file** (descriptor + logic) plus
-one `registerAdapter(...)` call in the host app. No SDK file changes:
-no case added to a switch, no `detect.ts` entry, no report shape.
-
-## jQuery project
+### jQuery project
 
 Script tag — no bundler, no imports:
 
@@ -425,35 +327,34 @@ Script tag — no bundler, no imports:
 ```
 
 That build is the only artefact that installs itself; see
-[Build](#build). It is all side effects, and it reads
-`window.analyticsOptions` once, on DOMContentLoaded — which is
-why the options may be set after the script tag. Set them from
-a deferred module instead and there is nothing to read yet:
-the build warns once and installs nothing.
+[Build](#build). It wires the three built-in probes (page, click,
+fetch) and reads `window.analyticsOptions` once, on
+DOMContentLoaded — which is why the options may be set after the
+script tag. Set them from a deferred module instead and there is
+nothing to read yet: the build warns once and installs nothing.
 
-Order matters: **jQuery must load first.** If it does not,
-detection finds nothing, the adapter stays a no-op and the page
-keeps working — you lose jQuery tracking, nothing else.
-
-With a bundler:
+With a bundler, wire jQuery by hand:
 
 ```ts
-import { init, registerDetectedAdapters } from "analytics/adapters";
+import { JQueryAjaxTracker } from "analytics/adapters/jquery";
 
-const analytics = init({ endpoint: "/api/analytics/events" });
-
-await registerDetectedAdapters(analytics);
+const jquery = new JQueryAjaxTracker(analytics);
+jquery.start();
+analytics.registerTracker(jquery);
 ```
 
-## Angular project
+Order matters: **jQuery must load first.** If it does not, the
+tracker's `canStart()` leaves it stopped and the page keeps
+working — you lose jQuery tracking, nothing else.
+
+### Angular project
 
 ```ts
 // app.config.ts
 import { provideHttpClient, withInterceptors } from "@angular/common/http";
-import { init } from "analytics/adapters";
 import { createAnalyticsInterceptor } from "analytics/adapters/angular";
 
-const analytics = init({ endpoint: "/api/analytics/events" });
+const analytics = new Analytics({ endpoint: "/api/analytics/events" });
 
 export const appConfig: ApplicationConfig = {
   providers: [
@@ -478,12 +379,8 @@ import { createAnalyticsHttpInterceptor } from "analytics/adapters/angular";
 }
 ```
 
-Both accept no recorder and fall back to the one `init()`
-stored, which is how a script-tag install reaches Angular:
-
-```ts
-withInterceptors([createAnalyticsInterceptor()]);
-```
+The interceptor takes the instance explicitly — there is no
+fallback recorder, and passing none drops events with a warning.
 
 ## Entry points
 
@@ -491,10 +388,8 @@ The barrel never pulls in a framework adapter, so importing the
 root is safe everywhere:
 
 ```
-analytics/index.ts           core + browser + network + init + detect
-analytics/adapters/index.ts  init, getAnalytics, reset,
-                             registerFetchAdapter, registerDetectedAdapters
-analytics/adapters/network/  NetworkTrackerCore, active recorder
+analytics/index.ts           core + browser + network + detect
+analytics/adapters/network/  NetworkTrackerCore
 analytics/adapters/jquery/   JQueryAjaxTracker
 analytics/adapters/angular/  createAnalyticsInterceptor (fn + class)
 ```
@@ -510,12 +405,13 @@ wherever you keep the sources — the demo uses a relative path.
 ## Boundary cases
 
 **Load order.** jQuery before the SDK. Angular does not care —
-the interceptor is provided at bootstrap, after `init()`.
+the interceptor is provided at bootstrap, after the instance is
+created.
 
 **Duplicate reporting.** Two guards, both easy to lose:
 
-- `init()` is idempotent, so two entry points cannot produce two
-  SDKs.
+- `BaseTracker.start()` is idempotent, so calling it twice on one
+  probe does not stack listeners.
 - The SDK's own endpoint is in `DEFAULT_IGNORE_URLS` and is
   **merged** with `ignoreUrls`, never replaced. A user who sets
   `ignoreUrls: ["/health"]` still cannot start a report →
@@ -543,20 +439,21 @@ the properties, which you can override. There used to be a
 a probe the app has to drive by hand is just a method call on the
 instance.
 
-**Global pollution.** One global, opt-out with
-`globalName: false`. `window.fetch` is patched but restored on
+**Global pollution.** The instance is not exposed globally unless
+you do it (the demo sets `window.analytics` itself; the IIFE build
+does too). `window.fetch` is patched but restored on
 `stop()`/`destroy()`; patch after other libraries that wrap
 fetch, or they will capture each other.
 
 **No crypto, no storage.** `crypto.randomUUID` exists only in a
 secure context, so plain-http intranet pages and sandboxed iframes
 have none — and private mode can refuse `sessionStorage` outright.
-Reading either unguarded threw out of `init()` before the host app
-had done anything wrong. Now `core/domain/id.ts` falls through
-`crypto.getRandomValues` to `Math.random` (same v4 shape on every
-branch), `Session` keeps the id in memory when storage refuses it,
-and `track()` / `page()` swallow whatever is left after warning once.
-An event may be dropped; the page keeps working.
+Reading either unguarded used to throw out of construction before
+the host app had done anything wrong. Now `core/domain/id.ts` falls
+through `crypto.getRandomValues` to `Math.random` (same v4 shape on
+every branch), `Session` keeps the id in memory when storage refuses
+it, and `track()` / `page()` swallow whatever is left after warning
+once. An event may be dropped; the page keeps working.
 
 **Personal data in clicks.** `Element Clicked` reports
 `element`, `tag`, `id` and `cssClass`, but **not** the element's
@@ -786,18 +683,14 @@ explicitly:
   same-name registration replaces instead of doubling, unregister
   detaches silently
 - `network.test.mjs` — all three transports emit identical names
-  and properties; each adapter no-ops when its framework is
-  missing; `init()` is idempotent; the `network` / `frameworks`
-  option matrix resolves the same way in both entry points
+  and properties; each probe no-ops when its framework is missing;
+  a manually registered `FetchTracker` patches fetch once, restores
+  it on teardown, and honours `ignoreUrls`
 - `robustness.test.mjs` — no `crypto.randomUUID`, storage disabled
   or absent, a throwing plugin, a request that never settles,
   `keepalive` gating, SSR construction, concurrent `flush()`
   sharing one request, `close()` draining the buffer, plus unit
   tests for ids / factory / session / destination
-- `adapter-plugin.test.mjs` — the plugin registry: register /
-  install / configure a third-party adapter, availability gating,
-  a throwing adapter, name replacement, integrations report
-  `manual`, `adapters.*` overriding the legacy switches
 - `architecture.test.mjs` — asserts core never imports adapters,
   the barrel never pulls in a framework adapter, no adapter
   imports `@angular/*` or `rxjs`, every listener can be removed,

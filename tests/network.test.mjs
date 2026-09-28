@@ -16,17 +16,8 @@ const { JQueryAjaxTracker } = require(
 );
 const { createAnalyticsInterceptor, createAnalyticsHttpInterceptor } =
   require("./.build/adapters/angular/index.js");
-const {
-  init,
-  getAnalytics,
-  reset,
-  registerDetectedAdapters,
-  registerFetchAdapter,
-} = require("./.build/adapters/index.js");
 const { Analytics } = require("./.build/core/api/analytics.js");
-const { getActiveRecorder } = require(
-  "./.build/adapters/network/active-recorder.js",
-);
+const { FetchTracker } = require("./.build/adapters/browser/fetch-tracker.js");
 
 function fakeRecorder() {
   const events = [];
@@ -307,35 +298,43 @@ test("detection reports only what the runtime actually has", () => {
   removeJQuery();
 });
 
-test("init() is idempotent and registers fetch", async () => {
-  reset();
+test("a manually registered FetchTracker patches fetch and tags the transport", async () => {
   env.reset();
 
-  globalThis.window.fetch = globalThis.fetch;
+  globalThis.window.fetch = async () => ({ ok: true, status: 200 });
   const originalFetch = globalThis.window.fetch;
 
-  const first = init({ endpoint: "/api/analytics/events" });
-  const second = init({ endpoint: "/api/analytics/events" });
+  const analytics = new Analytics({
+    endpoint: "/api/analytics/events",
+    batchSize: 100,
+    flushInterval: 100000,
+  });
 
-  assert.equal(first, second, "second init must not create a second SDK");
-  assert.equal(getAnalytics(), first);
+  const tracker = new FetchTracker(analytics);
+  tracker.start();
+  analytics.registerTracker(tracker);
 
   assert.notEqual(
     globalThis.window.fetch,
     originalFetch,
-    "fetch adapter should have patched window.fetch",
+    "the tracker should have patched window.fetch",
   );
 
-  const report = await registerDetectedAdapters(first, {});
+  await globalThis.window.fetch("http://x/api/users");
 
-  assert.equal(report.jquery, "unavailable");
+  assert.equal(analytics.pending, 1);
 
-  first.destroy();
-  reset();
+  analytics.destroy();
+  env.reset();
+
+  assert.equal(
+    globalThis.window.fetch,
+    originalFetch,
+    "destroy() must restore the original fetch",
+  );
 });
 
-test("registerFetchAdapter is idempotent: one request, one event", async () => {
-  reset();
+test("re-starting a FetchTracker does not patch twice", async () => {
   env.reset();
 
   let originalCalls = 0;
@@ -351,225 +350,66 @@ test("registerFetchAdapter is idempotent: one request, one event", async () => {
     flushInterval: 100000,
   });
 
-  assert.equal(registerFetchAdapter(analytics), true);
+  const tracker = new FetchTracker(analytics);
+  tracker.start();
+  analytics.registerTracker(tracker);
 
   const patched = globalThis.window.fetch;
 
-  assert.equal(registerFetchAdapter(analytics), true);
+  tracker.start();
+  tracker.start();
 
   assert.equal(
     globalThis.window.fetch,
     patched,
-    "a second call must not patch twice",
+    "a second start() must not patch twice",
   );
 
   await globalThis.window.fetch("http://x/api/users");
 
   assert.equal(originalCalls, 1);
-  assert.equal(
-    analytics.pending,
-    1,
-    "patching twice would emit two events per request",
-  );
+  assert.equal(analytics.pending, 1);
 
   analytics.destroy();
-  reset();
+  env.reset();
 });
 
-test("registerDetectedAdapters reports what actually got registered", async () => {
-  reset();
+test("FetchTracker accepts ignoreUrls as constructor options", async () => {
   env.reset();
 
-  globalThis.window.fetch = globalThis.fetch;
+  globalThis.window.fetch = async () => ({ ok: true, status: 200 });
 
-  const on = init({ endpoint: "/api/analytics/events" });
-  const onReport = await registerDetectedAdapters(on);
+  const analytics = new Analytics({
+    endpoint: "/api/analytics/events",
+    batchSize: 100,
+    flushInterval: 100000,
+  });
 
-  assert.equal(onReport.fetch, "registered");
-  assert.equal(onReport.jquery, "unavailable");
+  const tracker = new FetchTracker(analytics, {
+    ignoreUrls: ["/internal/health"],
+  });
+  tracker.start();
+  analytics.registerTracker(tracker);
 
-  reset();
+  await globalThis.window.fetch("http://x/internal/health");
+  assert.equal(analytics.pending, 0, "ignored URL must not be recorded");
+
+  await globalThis.window.fetch("http://x/api/users");
+  assert.equal(analytics.pending, 1);
+
+  analytics.destroy();
   env.reset();
-
-  const off = init({
-    endpoint: "/api/analytics/events",
-    network: false,
-  });
-
-  const offReport = await registerDetectedAdapters(off);
-
-  assert.equal(offReport.fetch, "skipped");
-
-  off.destroy();
-  reset();
 });
 
-test("reset() forgets the active recorder", () => {
-  reset();
-
-  globalThis.window.fetch = globalThis.fetch;
-
-  const analytics = init({ endpoint: "/api/analytics/events" });
-
-  assert.equal(getActiveRecorder(), analytics);
-
-  reset();
-
-  assert.equal(
-    getActiveRecorder(),
-    undefined,
-    "a destroyed instance must not stay reachable",
-  );
-});
-
-// The two switches (`network.*` defaults, `frameworks.*` force)
-// used to be parsed in two places that disagreed, so the same
-// config could install an adapter through one entry point and
-// skip it through the other. One matrix per entry point keeps
-// them honest.
-const FETCH_MATRIX = [
-  [{}, true, "no options: on by default"],
-  [{ network: { fetch: false } }, false, "network.fetch: off"],
-  [{ network: false }, false, "network: false switches everything off"],
-  [{ frameworks: { fetch: false } }, false, "frameworks.fetch: force off"],
-  [
-    { network: { fetch: true }, frameworks: { fetch: false } },
-    false,
-    "frameworks.fetch wins over network.fetch",
-  ],
-  [
-    { network: { fetch: false }, frameworks: { fetch: true } },
-    true,
-    "frameworks.fetch wins over network.fetch",
-  ],
-];
-
-test("init() resolves the fetch matrix the same way as the report", async () => {
-  for (const [options, expected, why] of FETCH_MATRIX) {
-    reset();
-    env.reset();
-
-    globalThis.window.fetch = globalThis.fetch;
-    const original = globalThis.window.fetch;
-
-    const analytics = init({
-      endpoint: "/api/analytics/events",
-      ...options,
-    });
-
-    const patched = globalThis.window.fetch !== original;
-
-    assert.equal(
-      patched,
-      expected,
-      `init(${JSON.stringify(options)}) -> fetch adapter installed ` +
-        `${patched}, expected ${expected} (${why})`,
-    );
-
-    const report = await registerDetectedAdapters(analytics);
-
-    assert.equal(
-      report.fetch === "registered",
-      expected,
-      `init(${JSON.stringify(options)}) -> report ${report.fetch} ` +
-        `(${why})`,
-    );
-
-    analytics.destroy();
-    reset();
-  }
-});
-
-test("registerDetectedAdapters resolves the same matrix from its arguments", async () => {
-  for (const [options, expected, why] of FETCH_MATRIX) {
-    // No arguments means "carry on with init()'s config", which
-    // is its own case below, not a row of the matrix.
-    if (Object.keys(options).length === 0) continue;
-
-    reset();
-    env.reset();
-
-    globalThis.window.fetch = globalThis.fetch;
-
-    // Baseline: init() asked for no fetch adapter, so the report
-    // reflects these arguments and not init()'s bookkeeping.
-    const analytics = init({
-      endpoint: "/api/analytics/events",
-      network: { fetch: false },
-    });
-
-    const report = await registerDetectedAdapters(analytics, options);
-
-    assert.equal(
-      report.fetch === "registered",
-      expected,
-      `registerDetectedAdapters(${JSON.stringify(options)}) -> ` +
-        `${report.fetch}, expected ${expected} (${why})`,
-    );
-
-    analytics.destroy();
-    reset();
-  }
-
-  // No arguments: init()'s config still applies.
-  reset();
-  env.reset();
-
-  globalThis.window.fetch = globalThis.fetch;
-
-  const gated = init({
-    endpoint: "/api/analytics/events",
-    network: { fetch: false },
-  });
-
-  const inherited = await registerDetectedAdapters(gated);
-
-  assert.equal(inherited.fetch, "skipped");
-
-  gated.destroy();
-  reset();
-});
-
-test("registerDetectedAdapters wires jQuery only when present", async () => {
-  reset();
-  env.reset();
-
-  globalThis.window.fetch = globalThis.fetch;
-
-  const off = init({
-    endpoint: "/api/analytics/events",
-    network: false,
-  });
-
-  const absent = await registerDetectedAdapters(off, {});
-  assert.equal(absent.jquery, "unavailable");
-
-  off.destroy();
-  reset();
-
-  installFakeJQuery();
-
-  const on = init({ endpoint: "/api/analytics/events" });
-
-  const present = await registerDetectedAdapters(on, {});
-  assert.equal(present.jquery, "registered");
-
-  // A second call cannot stack a second jQuery adapter.
-  const again = await registerDetectedAdapters(on, {});
-  assert.equal(again.jquery, "registered");
-
-  on.destroy();
-  reset();
-
-  const gated = init({
-    endpoint: "/api/analytics/events",
-    frameworks: { jquery: false },
-  });
-
-  const forcedOff = await registerDetectedAdapters(gated, {});
-  assert.equal(forcedOff.jquery, "skipped");
-
-  gated.destroy();
-  reset();
+test("a jQuery tracker is started by hand and stays silent without jQuery", () => {
   removeJQuery();
+
+  const recorder = fakeRecorder();
+  const tracker = new JQueryAjaxTracker(recorder);
+
+  assert.equal(tracker.available, false);
+  tracker.start();
+  assert.equal(tracker.isRunning, false, "a missing jQuery leaves it stopped");
+
+  tracker.stop();
 });

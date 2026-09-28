@@ -331,3 +331,60 @@ map）；`network`/`frameworks`/`autoTrack` 三个旧开关仍是别名。**102/
 **一个文件**（描述符 + 逻辑）+ 宿主合成根里一次 `registerAdapter(...)`（或
 `init({plugins:[...]})`、或 script 标签下的 `window.analyticsAdapters=[...]`）。
 **不改任何 SDK 文件**：不写 switch case、不碰 detect.ts、不改报告形状。
+
+---
+
+## 12. 移除 auto-detect 组合根与插件注册表（一次提交）
+
+### 结论：上一轮（§11）的"插件化"被判定为过度设计，本轮反转
+
+用户要的最终形态是：**没有 `init()`、没有 auto-detect、没有 `network` 配置，
+一切都是"手动 `new` 探针 + `start()` + `registerTracker()`"**。§11 建立的
+插件注册表/契约，恰好是这次要拆掉的东西 —— 它给「新增第三方 adapter 零 SDK
+改动」提供了机制，但用户明确不需要这个能力，反而嫌 `network` 这个 option 和
+auto-detect 语义多余。
+
+### 删除清单（净 -1911 行，+301）
+
+| 删除 | 原因 |
+|---|---|
+| `core/api/plugin.ts`（PluginHost/AnalyticsPlugin/AdapterIntegration/Adapter） | 插件契约，只剩一个角色该由 `Tracker` 承担 |
+| `adapters/registry.ts`（AdapterRegistry + registerAdapter 等） | 注册表，发现机制不需要了 |
+| `adapters/index.ts`（init/getAnalytics/reset/registerFetchAdapter/registerDetectedAdapters/installAdapters/planFor/InstallState） | 整个组合根，620 行 |
+| `adapters/browser/auto-track.ts`（AutoTrackOptions） | autoTrack 开关别名 |
+| `adapters/network/active-recorder.ts` | script-tag 的 recorder 槽位 |
+| 各 `xxxAdapter` 描述符（click/page/fetch/jquery/angular） | 插件契约的产物 |
+| `NetworkInitOptions` / `FrameworkOptions` / `AdapterConfig` / `AdapterSelection` / `AdapterReport` | 配置别名层，`network`/`frameworks`/`adapters`/`autoTrack` 全删 |
+| `tests/adapter-plugin.test.mjs` | 测的是已删机制 |
+
+### 保留下来的手动装配面
+
+- `Analytics`（core）：`registerTracker`/`unregisterTracker`/`destroy`/`close`
+  —— 正是手动注册要用的，一行没动。
+- `ClickTracker`/`PageTracker`/`FetchTracker`/`JQueryAjaxTracker`/`createAnalyticsInterceptor`
+  —— 探针类原样，`ignoreUrls`/`normalizeUrl` 直接作构造参数。
+- `detect.ts` —— 纯能力读取器（`detectEnvironment`/`isJQueryAvailable` 等），
+  报告"运行时有什么"，不再"安装什么"。
+- `iife.ts` —— 重写为直接 `new Analytics` + 三个内置探针 + `registerTracker`，
+  不再读 `window.analyticsAdapters`。
+- `core/debug` —— 另一套 `DebugPlugin`（观察者），用户早前拍板"维持现状"，不动。
+
+### 架构测试的相应调整
+
+- 删"组合根状态单一对象"断言（`adapters/index.ts` 没了）。
+- 改"script-tag 入口"断言：从"只 import `./adapters`"改为"必须直接构造 SDK、
+  且不得拉入 jQuery/Angular"。
+- `core/api/index.ts`、根 barrel 去掉 `plugin` / `./adapters` 导出。
+
+### 语义上要记住的两点
+
+- `registerTracker()` **只注册不启动**：探针必须显式 `.start()`。README 两版
+  都写明了。
+- `FetchTracker`/`JQueryAjaxTracker` 的"环境能不能用"仍由 `BaseTracker.canStart()`
+  表达 —— `start()` 在运行时缺失时保持停止，不是抛错。这就是用户要的
+  "不需要 auto detect，只需要 tracker 自己报可用性"。
+
+验证：**89/89 测试全绿**（原 102 里删了 8 条插件用例 + 删了 adapter-plugin 文件、
+重写了 network/registry/architecture 相关断言）；demo 严格 tsc 0 错；
+`dist/analytics.js` 从 ~57KB 缩到 ~39KB、iife 从 ~60KB 缩到 ~42KB —— 删掉的
+正是 init/registry/planFor 那些逻辑。

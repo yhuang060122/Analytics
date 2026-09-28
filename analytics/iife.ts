@@ -22,23 +22,14 @@
  * parsing is done (script injected later,AMD loader, bookmark-
  * let) it installs right away instead.
  */
-import {
-  init,
-  registerAdapter,
-  registerDetectedAdapters,
-} from "./adapters";
-import type { Adapter, InitOptions } from "./adapters";
+import { Analytics } from "./core/api/analytics";
+import type { AnalyticsConfig } from "./core/api/config";
+import { ClickTracker } from "./adapters/browser/click-tracker";
+import { FetchTracker } from "./adapters/browser/fetch-tracker";
+import { PageTracker } from "./adapters/browser/page-tracker";
 
 /** The global a script tag configures through. */
 const OPTIONS_KEY = "analyticsOptions";
-
-/**
- * Third-party adapters a script tag can register, in the same
- * way it passes `analyticsOptions`. Because a `<script>` cannot
- * `import`, this array is the one discovery hook that works for
- * it; everyone else calls `registerAdapter()` directly.
- */
-const ADAPTERS_KEY = "analyticsAdapters";
 
 /**
  * Never missing, just sometimes absent: a script tag may run
@@ -51,30 +42,23 @@ function globalScope(): Record<string, unknown> | undefined {
   return window as unknown as Record<string, unknown>;
 }
 
-function readOptions(scope: Record<string, unknown>): InitOptions | undefined {
+function readOptions(
+  scope: Record<string, unknown>,
+): AnalyticsConfig | undefined {
   const options = scope[OPTIONS_KEY];
 
   if (!options || typeof options !== "object") return undefined;
 
-  return options as InitOptions;
+  return options as AnalyticsConfig;
 }
 
-function registerFromGlobal(scope: Record<string, unknown>): void {
-  const adapters = scope[ADAPTERS_KEY];
-
-  if (!Array.isArray(adapters)) return;
-
-  for (const adapter of adapters) {
-    if (
-      adapter &&
-      typeof adapter === "object" &&
-      typeof (adapter as Adapter).name === "string"
-    ) {
-      registerAdapter(adapter as Adapter);
-    }
-  }
-}
-
+/**
+ * Wire the three built-in probes. Each is constructed, started
+ * and registered explicitly — there is no runtime detection and
+ * no registry: a `<script>` cannot pass function references, so
+ * the probes are fixed. The instance is exposed on `window` so
+ * the app can reach it after the script has run.
+ */
 function installFromGlobal(): void {
   const scope = globalScope();
 
@@ -94,11 +78,21 @@ function installFromGlobal(): void {
     return;
   }
 
-  // Both are idempotent, so loading this script twice — or
-  // alongside an app that already called `init()` — is safe:
-  // one instance, one set of probes.
-  registerFromGlobal(scope);
-  void registerDetectedAdapters(init(options));
+  const analytics = new Analytics(options);
+
+  const page = new PageTracker(analytics);
+  const click = new ClickTracker(analytics);
+  const fetch = new FetchTracker(analytics);
+
+  page.start();
+  click.start();
+  fetch.start();
+
+  analytics.registerTracker(page);
+  analytics.registerTracker(click);
+  analytics.registerTracker(fetch);
+
+  (scope as Record<string, unknown>)["analytics"] = analytics;
 }
 
 const doc = typeof document === "undefined" ? undefined : document;

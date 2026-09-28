@@ -81,7 +81,7 @@ dev server 内置了一个 **mock collector**（`demo/vite.config.ts`），
 analytics/                  SDK 本体
   core/                     与框架无关的引擎 —— 永不 import adapters/
     api/                    端口与 SDK 本身：Analytics、EventRecorder/Tracker
-                            （tracker.ts）、adapter 插件契约（plugin.ts）
+                            （tracker.ts）
     domain/                 event / context / session / id（id.ts 里是
                             crypto → getRandomValues → Math.random 的降级链）
     factory/                EventFactory：track()/page() → AnalyticsContext
@@ -93,16 +93,12 @@ analytics/                  SDK 本体
     dom.ts                  hasDom() —— 构造期访问 DOM 的守卫
     warn.ts                 warnOnce() —— 降级时"只警告一次、绝不静默"
   adapters/                 探针 —— 依赖方向朝内（指向 core/）
-    browser/                click-tracker、page-tracker、fetch-tracker、
-                            auto-track.ts（AutoTrackOptions 类型）
+    browser/                ClickTracker、PageTracker、FetchTracker
     network/                NetworkTrackerCore（统一的事件名/忽略规则）
-                            + active-recorder.ts（script-tag 的槽位）
     jquery/                 JQueryAjaxTracker（$.ajax 全局事件）
     angular/                createAnalyticsInterceptor（HttpClient）
     detect.ts               运行时特性探测
     page-context.ts         readPageContext() —— page 三元组唯一的出处
-    registry.ts             name → adapter 表（插件发现机制）
-    index.ts                init() —— 组合根
   index.ts                  公开 barrel（不重导出框架适配器）
   iife.ts                   <script> 构建入口 —— 带副作用、自安装
 
@@ -113,7 +109,8 @@ dist/                       构建产物（已 gitignore）
 ```
 
 唯一要紧的方向是：**core 永不 import adapters。** 适配器依赖朝内、只依赖
-core 的端口；装配只发生在组合根（`adapters/index.ts`）里。
+core 的端口；装配发生在**组合根**（也就是你的应用）里 —— 构造探针，然后
+`analytics.registerTracker()` 交给 SDK 统一收尾。
 `tests/architecture.test.mjs` 机械地守着这条以及另外十几条不变量。
 
 ---
@@ -139,17 +136,21 @@ core/       domain、factory、queue、transport、api、debug
 import { Analytics } from "./analytics/core/api/analytics";
 import { PageTracker } from "./analytics/adapters/browser/page-tracker";
 import { ClickTracker } from "./analytics/adapters/browser/click-tracker";
+import { FetchTracker } from "./analytics/adapters/browser/fetch-tracker";
 
 const analytics = new Analytics({ endpoint: "/api/analytics/events" });
 
 const page = new PageTracker(analytics);
 const click = new ClickTracker(analytics);
+const fetch = new FetchTracker(analytics);
 
 page.start();
 click.start();
+fetch.start();
 
 analytics.registerTracker(page);
 analytics.registerTracker(click);
+analytics.registerTracker(fetch);
 ```
 
 `registerTracker()` 只注册，不启动 —— 探针在调用 `.start()` 之前什么都不会做；
@@ -176,13 +177,10 @@ analytics/
     network/                 <-- 共享的 network core
       network-core.ts        命名、属性、忽略规则、
                              状态分类、transport 标签
-      active-recorder.ts     script-tag 流程的槽位
     jquery/                  $.ajax 全局事件
     angular/                 HttpClient 拦截器
     detect.ts                运行时特性探测
     page-context.ts          事件发生在哪；SSR 安全
-    registry.ts              name -> adapter 表（发现机制）
-    index.ts                 init() —— 组合根
   index.ts                   公开 barrel
   iife.ts                    <script> 构建入口 —— 带副作用
 ```
@@ -222,78 +220,61 @@ analytics/
 
 ## 入口
 
-```ts
-import { init } from "analytics/adapters";
-
-const analytics = init({
-  endpoint: "/api/analytics/events",
-  batchSize: 20,
-  autoTrack: { page: true, click: true },
-  network: { fetch: true, ignoreUrls: ["/internal/health"] },
-});
-```
-
-`init()` 是**同步且幂等**的 —— 第二次调用（或 script 标签被包含两次）
-返回第一个实例，而不是注册第二套探针（那样每个事件都会翻倍）。
-`getAnalytics()` 把它读回来，`reset()` 为测试和热重载拆掉它。
-
-不能同步装配的适配器要单独显式接入：
-
-```ts
-const report = await registerDetectedAdapters(analytics);
-// { fetch: "registered", jquery: "registered", angular: "manual" }
-```
-
-`angular: "manual"` 不是缺口：HTTP 拦截器无法把自己挂到 `HttpClient` 上，
-必须由应用提供。
-
-不带参数调用时，它会继承 `init()` 当初收到的选项，所以
-`init({ network: false })` 不会被稍后的 `registerDetectedAdapters()` 悄悄
-推翻。显式参数优先于那个回退。每个值的取值是 `registered` / `skipped` /
-`unavailable`（Angular 是 `manual`），其中 `skipped` 表示"存在但被配置关了"。
-
-两套开关可以打开或关闭一个适配器，且它们在两个入口里解析结果一致：
-
-| 配置 | 效果 |
-| --- | --- |
-| *（缺省）* | 运行时支持就开 |
-| `network: false` | 网络追踪整体关闭 |
-| `network: { fetch: false }` | 关掉那个 transport |
-| `frameworks: { fetch: false }` | 强制关，压过 `network` |
-| `adapters: { fetch: false }` | 按适配器配置，压过上面所有 |
-
-`init()` 与 `registerDetectedAdapters()` 共用同一个解析器，所以
-`init({ network: { fetch: false } })` 不可能通过一条路径装上适配器、
-又通过另一条路径跳过它。通用形式是
-`adapters: { <name>: <boolean | options> }`，这也正是配置第三方适配器的
-方式 —— 见[适配器即插件](#适配器即插件)。
-
-如果你自己构建 SDK 而不调 `init()`，同步的那一半也是公开的：
+没有 `init()`、也没有自动探测：你自己构建 SDK、自己装配探针。每个探针都
+针对实例构造、启动，然后注册进去以便统一销毁：
 
 ```ts
 import { Analytics } from "analytics";
-import { registerFetchAdapter } from "analytics/adapters";
+import { PageTracker } from "analytics/adapters/browser/page-tracker";
+import { ClickTracker } from "analytics/adapters/browser/click-tracker";
+import { FetchTracker } from "analytics/adapters/browser/fetch-tracker";
 
-const analytics = new Analytics({ endpoint: "/api/analytics/events" });
+const analytics = new Analytics({
+  endpoint: "/api/analytics/events",
+  batchSize: 20,
+});
 
-registerFetchAdapter(analytics, { ignoreUrls: ["/health"] });
-// 当 window.fetch 不存在时返回 false（SSR、老浏览器）
+const page = new PageTracker(analytics);
+const click = new ClickTracker(analytics);
+const fetch = new FetchTracker(analytics, {
+  ignoreUrls: ["/internal/health"],
+});
+
+page.start();
+click.start();
+fetch.start();
+
+analytics.registerTracker(page);
+analytics.registerTracker(click);
+analytics.registerTracker(fetch);
 ```
 
-它设计上就是幂等的：网络适配器会 patch 全局，第二个 FetchTracker 会把
-"已经被 patch 过的 fetch"当成它的"原始版本"，于是同一个请求会发出两个
-`API Request` 事件。`registerFetchAdapter` 和 `registerDetectedAdapters`
-都拒绝叠加。
+`registerTracker()` 只注册 —— 探针在调用 `.start()` 之前什么都不会做。
+`destroy()` 与 `unregisterTracker()` 会停掉探针；`await analytics.close()`
+是可等待的版本。见[投递与销毁](#投递与销毁)。
+
+「当前环境能不能用」这个问题由每个探针自己回答，而不是一个中央探测器：
+
+| 探针 | 构造 | `available` |
+| --- | --- | --- |
+| `PageTracker` | `new PageTracker(recorder)` | —（读 `window.location`） |
+| `ClickTracker` | `new ClickTracker(recorder, { attribute? })` | —（需要 DOM） |
+| `FetchTracker` | `new FetchTracker(recorder, { ignoreUrls?, normalizeUrl? })` | `window.fetch` 存在 |
+| `JQueryAjaxTracker` | `new JQueryAjaxTracker(recorder, opts)` | `jQuery`/`$` 有 `.ajax` |
+
+运行时缺失的探针在 `.start()` 时保持停止 —— `BaseTracker.canStart()` 是
+这个钩子。`FetchTracker` 会 patch `window.fetch` 并在 `stop()`/`destroy()`
+时还原；启动两次不会 patch 两次。
 
 ### 探测
 
-`detect.ts` 检查运行时，只注册真实存在的东西：
+`detect.ts` 是一个纯能力读取器 —— 它只报告运行时有什么，不安装任何东西：
 
-| 信号 | 启用 |
+| 信号 | 结果 |
 |---|---|
-| `window.fetch` 是函数 | fetch 适配器 |
-| `jQuery` / `$` 有 `.ajax` | jQuery 适配器 |
-| `window.angular` / `window.ng` | 报告 `manual` |
+| `window.fetch` 是函数 | `fetch: true` |
+| `jQuery` / `$` 有 `.ajax` | `jquery: true` |
+| `window.angular` / `window.ng` | `angularjs` / `angularDevMode` |
 
 `$.ajax` 才是真正的信号，而不是那个裸的 `$` 全局 —— 别的库也认领 `$`。
 `window.angular` 只能证明 AngularJS 1.x —— Angular 2+ 在生产构建里不暴露
@@ -307,74 +288,7 @@ detectEnvironment();
 //   angularDevMode: false, dom: true }
 ```
 
-## 适配器即插件
-
-现在每个内置适配器 —— click、page、fetch、jQuery、Angular —— 都是一个
-*插件*：一个描述符，坐在同一个注册表（`adapters/registry.ts`）里，实现
-同一个契约（`core/api/plugin.ts`）。`init()` 不再内置一张名字开关表；它
-安装"已注册的东西"。这正是第三方适配器无需改动 SDK 就能存在的原因。
-
-契约有两个角色，因为其中只有一个能由我们启动：
-
-```ts
-import type { AnalyticsPlugin } from "analytics";
-
-export const vueRouter: AnalyticsPlugin<{ routes: unknown }> = {
-  name: "vue-router",
-
-  available: () => typeof router !== "undefined",
-
-  start(host, options) {
-    const off = options.routes.afterEach(to => host.page(to.fullPath));
-    host.registerTracker({ start: () => {}, stop: off });
-  },
-};
-```
-
-- `name` —— 身份，也是寻址它的配置键。
-- `available?(host)` —— 当前运行时是否支持它。探测刻意做成每个适配器
-  自带：它曾经是一张必须和适配器保持同步的开关表，所以新增 transport
-  意味着还要去改第二个文件、且那个文件必须和第一个保持一致。
-- `start(host, options)` —— 安装。`host` 是一个 `PluginHost`：它记录事件
-  （`track` / `page`）、为销毁注册 tracker、并暴露 `debug`。
-- `stop?()` —— 释放 `start()` 拿走的、不属于已注册 tracker 的那部分资源。
-
-`AdapterIntegration` 是第二个角色，给*应用*驱动的适配器用。HTTP 拦截器
-无法把自己挂到 `HttpClient` 上，所以没有可"启动"的东西 —— 它暴露
-`create(host)` 而不是生命周期，并报告为 `manual`。Angular 适配器就是内置
-的例子。
-
-**注册**有三种方式 —— `init()` 之前 `registerAdapter(plugin)`、
-`init({ plugins: [plugin] })`，或从 `<script>` 里
-`window.analyticsAdapters = [plugin]`：
-
-```ts
-import { registerAdapter, init } from "analytics/adapters";
-
-registerAdapter(vueRouter);
-
-const analytics = init({
-  endpoint: "/api/analytics/events",
-  adapters: { "vue-router": { routes: router } },
-});
-```
-
-**配置**用 `adapters.<name>`：`false` 关闭它，对象则成为它的选项。旧的
-开关（`network`、`frameworks`、`autoTrack`）仍是别名。优先级，越具体越先：
-`adapters.*` → `frameworks.*` / `autoTrack.*` → `network.*` →
-`network: false` → 开。
-
-**查看**用 `listAdapters()`、`getAdapter(name)`，以及
-`installAdapters()` / `registerDetectedAdapters()` 返回的报告 —— 它的
-`adapters` map 里每个已注册的适配器占一项
-（`registered` / `skipped` / `unavailable` / `manual`），而
-`fetch` / `jquery` / `angular` 为老调用方保留在顶层。
-
-新增一个适配器的足迹是**一个文件**（描述符 + 逻辑）加宿主应用里一次
-`registerAdapter(...)` 调用。不改任何 SDK 文件：不加 switch case、不碰
-`detect.ts`、不改报告形状。
-
-## jQuery 项目
+### jQuery 项目
 
 Script 标签 —— 无打包器、无 import：
 
@@ -388,33 +302,33 @@ Script 标签 —— 无打包器、无 import：
 <!-- 从这之后 window.analytics 就存在了 -->
 ```
 
-那个构建是唯一会自安装的产物；见[构建](#构建)。它全是副作用，且只在
-DOMContentLoaded 时读一次 `window.analyticsOptions` —— 这就是选项可以在
-script 标签之后设置的原因。改成从 deferred module 里设置的话，那时还没
-东西可读：构建会警告一次、什么也不装。
+那个构建是唯一会自安装的产物；见[构建](#构建)。它装配三个内置探针
+（page、click、fetch），只在 DOMContentLoaded 时读一次
+`window.analyticsOptions` —— 这就是选项可以在 script 标签之后设置的原因。
+改成从 deferred module 里设置的话，那时还没东西可读：构建会警告一次、
+什么也不装。
 
-顺序很关键：**jQuery 必须先加载。** 否则探测找不到东西，适配器保持
-no-op，页面照常工作 —— 你只是丢掉了 jQuery 追踪，没有别的。
-
-用打包器的话：
+用打包器的话，手工装配 jQuery：
 
 ```ts
-import { init, registerDetectedAdapters } from "analytics/adapters";
+import { JQueryAjaxTracker } from "analytics/adapters/jquery";
 
-const analytics = init({ endpoint: "/api/analytics/events" });
-
-await registerDetectedAdapters(analytics);
+const jquery = new JQueryAjaxTracker(analytics);
+jquery.start();
+analytics.registerTracker(jquery);
 ```
 
-## Angular 项目
+顺序很关键：**jQuery 必须先加载。** 否则 `canStart()` 让它保持停止，页面
+照常工作 —— 你只是丢掉了 jQuery 追踪，没有别的。
+
+### Angular 项目
 
 ```ts
 // app.config.ts
 import { provideHttpClient, withInterceptors } from "@angular/common/http";
-import { init } from "analytics/adapters";
 import { createAnalyticsInterceptor } from "analytics/adapters/angular";
 
-const analytics = init({ endpoint: "/api/analytics/events" });
+const analytics = new Analytics({ endpoint: "/api/analytics/events" });
 
 export const appConfig: ApplicationConfig = {
   providers: [
@@ -439,22 +353,15 @@ import { createAnalyticsHttpInterceptor } from "analytics/adapters/angular";
 }
 ```
 
-两者都接受"不传 recorder"、回退到 `init()` 存下的那个，这是 script-tag
-安装触达 Angular 的方式：
-
-```ts
-withInterceptors([createAnalyticsInterceptor()]);
-```
+拦截器显式接收实例 —— 没有回退 recorder，不传的话事件会被丢弃并警告一次。
 
 ## 入口点
 
 barrel 从不拉入框架适配器，所以在任何地方 import 根都是安全的：
 
 ```
-analytics/index.ts           core + browser + network + init + detect
-analytics/adapters/index.ts  init、getAnalytics、reset、
-                             registerFetchAdapter、registerDetectedAdapters
-analytics/adapters/network/  NetworkTrackerCore、active recorder
+analytics/index.ts           core + browser + network + detect
+analytics/adapters/network/  NetworkTrackerCore
 analytics/adapters/jquery/   JQueryAjaxTracker
 analytics/adapters/angular/  createAnalyticsInterceptor（函数 + 类）
 ```
@@ -468,11 +375,11 @@ analytics/adapters/angular/  createAnalyticsInterceptor（函数 + 类）
 ## 边界情形
 
 **加载顺序。** jQuery 在 SDK 之前。Angular 无所谓 —— 拦截器在 bootstrap
-时、`init()` 之后提供。
+时、实例创建之后提供。
 
 **重复上报。** 两道守卫，都容易丢：
 
-- `init()` 幂等，所以两个入口不会产出两个 SDK。
+- `BaseTracker.start()` 幂等，所以对同一个探针调两次不会叠加监听器。
 - SDK 自己的端点写死在 `DEFAULT_IGNORE_URLS` 里，且与 `ignoreUrls` 是
   **合并**关系、永不替换。设了 `ignoreUrls: ["/health"]` 的用户依然无法
   触发 上报 → `API Request` → 上报 的死循环。
@@ -494,14 +401,14 @@ router.afterEach(to => analytics.page(to.fullPath));
 曾经有个 `PageTracker.navigate()` 专干这个；从没人调用它，而一个需要应用
 手动的探针，其实就是实例上的一个方法调用。
 
-**全局污染。** 只有一个全局，用 `globalName: false` 可关闭。`window.fetch`
-会被 patch，但在 `stop()`/`destroy()` 时恢复；要在其他包装 fetch 的库
-*之后* patch，否则它们会互相捕获。
+**全局污染。** 实例不会自己暴露到全局（demo 自己设 `window.analytics`，
+IIFE 构建也这么做）。`window.fetch` 会被 patch，但在 `stop()`/`destroy()`
+时恢复；要在其他包装 fetch 的库*之后* patch，否则它们会互相捕获。
 
 **没有 crypto、没有 storage。** `crypto.randomUUID` 只存在于安全上下文，
 所以纯 http 内网页与沙箱 iframe 里都没有 —— 隐私模式还可能直接拒绝
 `sessionStorage`。过去不加保护地读它们会在宿主应用还没做错任何事之前就从
-`init()` 抛异常。现在 `core/domain/id.ts` 会一路降级：`crypto.getRandomValues`
+构造过程抛异常。现在 `core/domain/id.ts` 会一路降级：`crypto.getRandomValues`
 → `Math.random`（每个分支产出同样的 v4 形状），`Session` 在 storage 拒绝时
 把 id 留在内存里，`track()` / `page()` 则把剩下的都吞掉并警告一次。
 事件可能被丢弃；页面照常工作。
@@ -692,15 +599,12 @@ tsc 编译进 `tests/.build`，然后对它显式列出的文件跑 `node --test
 - `debug-plugin.test.mjs` —— 插件观察整条流水线、同名注册替换而非翻倍、
   unregister 静默解绑
 - `network.test.mjs` —— 三个 transport 发出相同的名字与属性；框架缺失时
-  每个适配器 no-op；`init()` 幂等；`network` / `frameworks` 选项矩阵在两个
-  入口里解析一致
+  每个探针 no-op；手动注册的 `FetchTracker` 只 patch 一次 fetch、销毁时还原、
+  且尊重 `ignoreUrls`
 - `robustness.test.mjs` —— 没有 `crypto.randomUUID`、storage 被禁用或缺失、
   抛异常的插件、永不 settle 的请求、`keepalive` 门禁、SSR 构造、并发
   `flush()` 共用一个请求、`close()` 排空缓冲区，外加 ids / factory /
   session / destination 的单元测试
-- `adapter-plugin.test.mjs` —— 插件注册表：注册 / 安装 / 配置第三方适配器、
-  可用性门禁、抛异常的适配器、名字替换、integration 报 `manual`、
-  `adapters.*` 压过旧开关
 - `architecture.test.mjs` —— 断言 core 永不 import adapters、barrel 永不
   拉入框架适配器、没有适配器 import `@angular/*` 或 `rxjs`、每个监听器都可
   移除、script-tag 入口留在库之外、根目录没有 package.json、测试脚本真的

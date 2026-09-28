@@ -20,4 +20,3 @@ export * from "./adapters/browser";
 export * from "./adapters/detect";
 export * from "./adapters/network";
 export * from "./adapters/page-context";
-export * from "./adapters";

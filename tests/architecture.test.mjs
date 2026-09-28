@@ -351,26 +351,6 @@ test("network event names come from one place", () => {
   );
 });
 
-test("the composition root keeps its state in one object", () => {
-  // Three separate module-level declarations used to mean three
-  // matching lines in `reset()`; miss one and a hot reload came
-  // back half-initialised. One `let` means one assignment.
-  const source = codeOf(join(adaptersDir, "index.ts"));
-
-  const mutable = [...source.matchAll(/^let\s+(\w+)/gm)].map(
-    (match) => match[1],
-  );
-
-  // Deliberately not asserting the name: renaming it does not
-  // weaken the invariant, and a hardcoded name would fail a
-  // rename for no reason.
-  assert.equal(
-    mutable.length,
-    1,
-    `module-level mutable state must live in a single object so reset() can drop it at once, found: ${mutable.join(", ")}`,
-  );
-});
-
 test("types are imported with import type", () => {
   // The SDK builds to CommonJS, so `verbatimModuleSyntax` (which
   // would catch this at compile time) cannot be enabled here —
@@ -440,15 +420,25 @@ test("the script-tag entry stays out of the library", () => {
     "only build/tsup.config.ts may point at the IIFE entry",
   );
 
-  // Everything it needs already lives in the composition
-  // root. Importing adapters directly here would bypass the
-  // runtime detection that decides which of them may start.
-  // Deduplicated: the entry imports the module twice, once
-  // for `init` and once for the `InitOptions` type.
+  // The entry wires the built-in probes directly — importing it
+  // must not drag in jQuery or Angular, which a bare script tag
+  // may not have. Page/click/fetch are the fixed set a `<script>`
+  // can install without passing function references.
+  const entryImports = importsOf(entry);
+
+  assert.ok(
+    entryImports.includes("./core/api/analytics"),
+    "the entry must construct the SDK directly",
+  );
+
+  const frameworkLeak = entryImports.filter((specifier) =>
+    /adapters\/(jquery|angular)/.test(specifier),
+  );
+
   assert.deepEqual(
-    [...new Set(importsOf(entry))],
-    ["./adapters"],
-    "the entry should stay a thin wrapper over init()",
+    frameworkLeak,
+    [],
+    "the script-tag entry must not pull framework adapters",
   );
 });
 

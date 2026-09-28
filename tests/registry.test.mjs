@@ -145,29 +145,6 @@ test("re-starting a probe does not stack listeners", () => {
   analytics.destroy();
 });
 
-test("init() autoTrack switch still drives the registry adapters", () => {
-  env.reset();
-
-  const { init, reset } = require("./.build/adapters/index.js");
-
-  // Analytics itself registers one visibilitychange and one
-  // beforeunload (hidden-tab flush), so the PageTracker's own
-  // listeners show up as a *second* registration of each.
-  const analytics = init({
-    endpoint: "/api/analytics/events",
-    autoTrack: { click: true, page: false },
-  });
-
-  assert.equal(env.count("doc", "click"), 1);
-  // page:false -> no PageTracker, so each lifecycle listener
-  // appears exactly once (Analytics' own).
-  assert.equal(env.count("doc", "visibilitychange"), 1);
-  assert.equal(env.count("win", "beforeunload"), 1);
-
-  analytics.destroy();
-  reset();
-});
-
 test("event pipeline is unchanged: click -> queued -> flushing -> sent", async () => {
   env.reset();
 

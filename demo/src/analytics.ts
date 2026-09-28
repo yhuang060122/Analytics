@@ -1,40 +1,43 @@
-import { init } from "../../analytics/adapters";
+import { Analytics } from "../../analytics/core/api/analytics";
+import { ClickTracker } from "../../analytics/adapters/browser/click-tracker";
+import { PageTracker } from "../../analytics/adapters/browser/page-tracker";
+import { FetchTracker } from "../../analytics/adapters/browser/fetch-tracker";
 
 /**
  * Composition root for the demo.
  *
- * One call: `init()` creates the SDK, starts the browser
- * probes and registers every network adapter the current
- * runtime supports. Calling it twice returns the same
- * instance, so a second entry point cannot double events.
- *
- * Imports the adapter entry, not the root barrel: the
- * barrel is the surface the ESM build is made from, and
- * everything this file needs lives in the entry that owns
- * `init()`.
+ * The SDK no longer auto-detects or auto-installs probes: every
+ * tracker is constructed, started and registered by hand. That
+ * makes the wiring explicit and leaves the set of active probes
+ * exactly what is listed below.
  */
-export const analytics = init({
+const analytics = new Analytics({
   endpoint: "/api/analytics/events",
 
   // Small values so batching is visible while clicking.
   batchSize: 5,
   flushInterval: 2000,
 
-  autoTrack: {
-    page: true,
-    click: true,
-  },
-
-  network: {
-    fetch: true,
-  },
-
   debug: {
     enabled: true,
     console: true,
     inspector: true,
   },
-
-  // Also sets window.analytics for console poking.
-  globalName: "analytics",
 });
+
+const page = new PageTracker(analytics);
+const click = new ClickTracker(analytics);
+const fetch = new FetchTracker(analytics);
+
+page.start();
+click.start();
+fetch.start();
+
+analytics.registerTracker(page);
+analytics.registerTracker(click);
+analytics.registerTracker(fetch);
+
+// Also sets window.analytics for console poking.
+(globalThis as Record<string, unknown>)["analytics"] = analytics;
+
+export { analytics };
