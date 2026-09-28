@@ -94,7 +94,7 @@ analytics/                  SDK 本体
     warn.ts                 warnOnce() —— 降级时"只警告一次、绝不静默"
   adapters/                 探针 —— 依赖方向朝内（指向 core/）
     browser/                click-tracker、page-tracker、fetch-tracker、
-                            auto-track.ts（startAutoTrack）
+                            auto-track.ts（AutoTrackOptions 类型）
     network/                NetworkTrackerCore（统一的事件名/忽略规则）
                             + active-recorder.ts（script-tag 的槽位）
     jquery/                 JQueryAjaxTracker（$.ajax 全局事件）
@@ -137,18 +137,24 @@ core/       domain、factory、queue、transport、api、debug
 
 ```ts
 import { Analytics } from "./analytics/core/api/analytics";
-import { startAutoTrack } from "./analytics/adapters/browser/auto-track";
+import { PageTracker } from "./analytics/adapters/browser/page-tracker";
+import { ClickTracker } from "./analytics/adapters/browser/click-tracker";
 
 const analytics = new Analytics({ endpoint: "/api/analytics/events" });
 
-analytics.registerTracker(
-  startAutoTrack(analytics, { page: true, click: true }),
-);
+const page = new PageTracker(analytics);
+const click = new ClickTracker(analytics);
+
+page.start();
+click.start();
+
+analytics.registerTracker(page);
+analytics.registerTracker(click);
 ```
 
-`registerTracker()` 只注册，不启动 —— 何时启动是调用方的决定。
-`destroy()` 与 `unregisterTracker()` 会停掉探针；`await analytics.close()`
-是可等待的版本。见[投递与销毁](#投递与销毁)。
+`registerTracker()` 只注册，不启动 —— 探针在调用 `.start()` 之前什么都不会做；
+何时启动是调用方的决定。`destroy()` 与 `unregisterTracker()` 会停掉探针；
+`await analytics.close()` 是可等待的版本。见[投递与销毁](#投递与销毁)。
 
 **结构上幂等。** 每个探针都继承 `BaseTracker`，由基类持有 running 标志。
 子类实现 `onStart()`/`onStop()`，不可能不小心重复注册监听器。`canStart()`

@@ -53,7 +53,6 @@ test("adapters depend on the core port, not the Analytics class", () => {
     .filter((file) => file.endsWith(".ts"))
     .filter((file) => !file.includes("angular"))
     .filter((file) => !file.includes("jquery"))
-    .filter((file) => !file.includes("auto-track"))
     // adapters/index.ts is the composition root: it is
     // allowed to know the concrete Analytics class.
     .filter((file) => !file.endsWith(join("adapters", "index.ts")))

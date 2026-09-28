@@ -1,17 +1,14 @@
 // adapters/index.ts
 
 import { Analytics } from "../core/api/analytics";
+import type { AnalyticsConfig } from "../core/api/config";
 import type {
   Adapter,
   AnalyticsPlugin,
   PluginHost,
 } from "../core/api/plugin";
 import { warnOnce } from "../core/warn";
-import { createBrowserAnalytics } from "./browser/auto-track";
-import type {
-  AutoTrackOptions,
-  BrowserAnalyticsConfig,
-} from "./browser/auto-track";
+import type { AutoTrackOptions } from "./browser/auto-track";
 import { clickAdapter } from "./browser/click-tracker";
 import { fetchAdapter } from "./browser/fetch-tracker";
 import { pageAdapter } from "./browser/page-tracker";
@@ -85,8 +82,17 @@ export interface AdapterConfig {
 }
 
 export interface InitOptions
-  extends BrowserAnalyticsConfig,
+  extends AnalyticsConfig,
     FrameworkOptions {
+  /**
+   * Which DOM probes to install (`page`, `click`). This is the
+   * real, supported switch — `init()` defaults both to on. It
+   * lives in the adapter layer rather than on `AnalyticsConfig`
+   * because "page" and "click" are adapter concepts: core cannot
+   * name them without knowing about adapters.
+   */
+  autoTrack?: AutoTrackOptions;
+
   /**
    * Per-adapter switches and options. Wins over the aliases
    * below because it is the most specific spelling.
@@ -155,7 +161,7 @@ const NETWORK_ADAPTERS: readonly string[] = ["fetch", "jquery"];
 
 /**
  * The keys that belong to the adapter layer and therefore never
- * reach core. Stripped before `createBrowserAnalytics` is
+ * reach core. Stripped before the `Analytics` constructor is
  * called, because that constructor must not learn about
  * adapters — the probes are installed through the registry
  * instead, which is the only reason a third party can add one
@@ -221,7 +227,7 @@ export function init(options: InitOptions): Analytics {
     autoTrack: options.autoTrack,
   };
 
-  const analytics = createBrowserAnalytics(sdkOptions(options));
+  const analytics = new Analytics(sdkOptions(options));
 
   const { pending } = installAll(analytics, options);
 
@@ -377,14 +383,14 @@ function prepare(plugins?: Adapter[]): void {
  * `Omit` keeps this in sync automatically: a new core option
  * flows through, a new adapter switch is dropped here.
  */
-function sdkOptions(options: InitOptions): BrowserAnalyticsConfig {
+function sdkOptions(options: InitOptions): AnalyticsConfig {
   const rest = { ...options } as Record<string, unknown>;
 
   for (const key of ADAPTER_OPTION_KEYS) {
     delete rest[key];
   }
 
-  return rest as unknown as BrowserAnalyticsConfig;
+  return rest as unknown as AnalyticsConfig;
 }
 
 function report(

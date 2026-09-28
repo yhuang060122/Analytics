@@ -97,7 +97,7 @@ analytics/                  the SDK itself
     warn.ts                 warnOnce() — degrade loudly, exactly once
   adapters/                 probes — depend inward on core/
     browser/                click-tracker, page-tracker, fetch-tracker,
-                            auto-track.ts (startAutoTrack)
+                            auto-track.ts (AutoTrackOptions type)
     network/                NetworkTrackerCore (shared event names/ignore rule)
                             + active-recorder.ts (script-tag slot)
     jquery/                 JQueryAjaxTracker ($.ajax global events)
@@ -143,17 +143,24 @@ core.
 
 ```ts
 import { Analytics } from "./analytics/core/api/analytics";
-import { startAutoTrack } from "./analytics/adapters/browser/auto-track";
+import { PageTracker } from "./analytics/adapters/browser/page-tracker";
+import { ClickTracker } from "./analytics/adapters/browser/click-tracker";
 
 const analytics = new Analytics({ endpoint: "/api/analytics/events" });
 
-analytics.registerTracker(
-  startAutoTrack(analytics, { page: true, click: true }),
-);
+const page = new PageTracker(analytics);
+const click = new ClickTracker(analytics);
+
+page.start();
+click.start();
+
+analytics.registerTracker(page);
+analytics.registerTracker(click);
 ```
 
 `registerTracker()` only registers — starting is the caller's
-decision. `destroy()` and `unregisterTracker()` stop probes;
+decision (a probe does nothing until you call `.start()`).
+`destroy()` and `unregisterTracker()` stop probes;
 `await analytics.close()` is the awaitable variant. See
 [Delivery & teardown](#delivery--teardown).
 
