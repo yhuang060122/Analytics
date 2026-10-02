@@ -39,73 +39,15 @@ export function installBrowser(fetchImpl) {
   // empty and a probe reading the page by hand would look fine.
   globalThis.location = globalThis.window.location;
 
-  /**
-   * Just enough DOM for DebugInspector to build its panel:
-   * createElement + body.appendChild + the handful of
-   * properties the panel touches.
-   */
-  const element = (tag) => {
-    const el = {
-      tagName: tag.toUpperCase(),
-      children: [],
-      id: "",
-      style: { cssText: "" },
-      appendChild(child) {
-        el.children.push(child);
-        return child;
-      },
-      insertBefore(child, ref) {
-        const at = ref ? el.children.indexOf(ref) : -1;
-
-        if (at < 0) el.children.push(child);
-        else el.children.splice(at, 0, child);
-
-        return child;
-      },
-      removeChild(child) {
-        const i = el.children.indexOf(child);
-        if (i >= 0) el.children.splice(i, 1);
-        return child;
-      },
-      remove() {},
-      setAttribute() {},
-      addEventListener() {},
-      removeEventListener() {},
-      querySelector: () => null,
-      querySelectorAll: () => [],
-    };
-
-    // Real DOM: assigning textContent drops every child, which
-    // is exactly how the inspector clears its list. Without it
-    // a full re-render would look like it stacked duplicates.
-    let text = "";
-
-    Object.defineProperty(el, "textContent", {
-      get: () => text,
-      set: (value) => {
-        text = value;
-        if (value === "") el.children.length = 0;
-      },
-      enumerable: true,
-    });
-
-    Object.defineProperty(el, "firstChild", {
-      get: () => el.children[0] ?? null,
-    });
-
-    Object.defineProperty(el, "lastChild", {
-      get: () => el.children[el.children.length - 1] ?? null,
-    });
-
-    return el;
-  };
-
+  // Only what the SDK actually reads. There is no
+  // createElement/appendChild here on purpose: a panel that
+  // builds DOM would need a real DOM to be tested against, and
+  // a fake one would pass while the browser failed. Probes get
+  // their elements from the event, as hand-written objects.
   globalThis.document = Object.assign(target(reg.doc), {
     visibilityState: "visible",
     title: "demo",
     referrer: "",
-    createElement: element,
-    body: element("body"),
   });
 
   globalThis.sessionStorage = {

@@ -1,13 +1,24 @@
-import { BaseTracker } from "../../core/api/tracker";
-import type { EventRecorder } from "../../core/api/tracker";
+import { BaseTracker } from "../api/tracker";
+import type { EventRecorder } from "../api/tracker";
+import { hasDom } from "../dom";
 
 export class PageTracker extends BaseTracker {
 
   private readonly recorder: EventRecorder;
 
-  private currentPath = window.location.pathname;
+  /**
+   * Read on `start()`, not here.
+   *
+   * A field initialiser runs during construction, so reading
+   * `window.location` in one meant `new PageTracker(recorder)`
+   * threw on a server — while `new Analytics(...)` right next to
+   * it did not. That asymmetry is the worst shape a bug can
+   * take: the facade is documented as safe to construct anywhere,
+   * so the probe that sits next to it appears to be too.
+   */
+  private currentPath = "";
 
-  private enteredAt = performance.now();
+  private enteredAt = 0;
 
   constructor(recorder: EventRecorder) {
     super();
@@ -18,7 +29,13 @@ export class PageTracker extends BaseTracker {
   /**
    * Start browser page tracking.
    */
+  protected canStart(): boolean {
+    return hasDom();
+  }
+
   protected onStart(): void {
+
+    this.currentPath = window.location.pathname;
 
     this.trackPage();
 

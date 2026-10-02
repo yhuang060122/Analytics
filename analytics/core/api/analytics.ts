@@ -6,7 +6,7 @@ import { HttpDestination } from "../transport";
 import { warnOnce } from "../warn";
 import type { AnalyticsContext } from "../domain";
 import type { AnalyticsConfig } from "./config";
-import type { EventRecorder, Tracker } from "./tracker";
+import type { EventRecorder, ProbeFactory, Tracker } from "./tracker";
 
 export class Analytics implements EventRecorder {
 
@@ -56,16 +56,52 @@ export class Analytics implements EventRecorder {
       {
         batchSize: config.batchSize,
         flushInterval: config.flushInterval,
-        maxRetries: config.maxRetries,
-        retryDelay: config.retryDelay,
-        maxQueueSize: config.maxQueueSize,
       }
     );
 
 
     this.factory = new EventFactory(this.debug);
 
+    this.wireProbes(config.probes);
+
     this.registerLifecycle();
+
+  }
+
+  /**
+   * Build and register whatever the host listed in `probes`.
+   *
+   * Runs last in the constructor, and only because of ordering:
+   * a factory is handed `this`, so every field it could reach
+   * has to exist first. Registering is all that happens here —
+   * `start()` is still the host's call, because when a probe
+   * should begin is not something a config file should decide.
+   *
+   * A factory that throws is warned about and skipped. Letting
+   * it out would mean an exception from a constructor, with a
+   * half-built instance attached to nothing; the host would see
+   * a crash during module evaluation and no clue which probe
+   * caused it.
+   */
+  private wireProbes(factories: ProbeFactory[] = []): void {
+
+    for (const build of factories) {
+
+      try {
+
+        this.registerTracker(build(this));
+
+      } catch (error) {
+
+        warnOnce(
+          "probe-factory-failed",
+          "a probe factory threw while wiring the SDK; that probe was " +
+            `skipped and the rest were registered (${String(error)})`,
+        );
+
+      }
+
+    }
 
   }
 
@@ -226,16 +262,8 @@ export class Analytics implements EventRecorder {
     return this.queue.flush(options);
   }
 
-  clear(): void {
-    this.queue.clear();
-  }
-
   get pending(): number {
     return this.queue.size;
-  }
-
-  get retrying(): boolean {
-    return this.queue.retrying;
   }
 
   /**

@@ -8,24 +8,20 @@ import { defineConfig } from "tsup";
  * installed here, not next to the sources. Everything is
  * therefore relative to this file, one level up.
  *
- * Two builds from the same sources:
+ * One build: dist/analytics.js, the ESM library entry
+ * (`index.ts`). Side-effect free — importing it starts
+ * nothing, and wiring the probes stays the caller's decision.
  *
- *   dist/analytics.js       ESM, the library entry (`index.ts`).
- *                           Side-effect free: importing it
- *                           starts nothing.
- *   dist/analytics.iife.js  `<script>` build (`iife.ts`). Side
- *                           effects only: it reads
- *                           window.analyticsOptions and
- *                           installs itself.
- *
- * The ESM bundle is the barrel rather than a slimmer
- * composition-root entry on purpose: the barrel is the
- * library's public surface, `init()` included. The IIFE
- * entry is the one place allowed to install by itself;
- * importing the ESM one must stay a decision the caller
- * makes.
+ * There used to be a second `<script>` bundle that read
+ * `window.analyticsOptions` and installed itself. It is gone,
+ * and with it the whole class of problems that came with it:
+ * a second entry to keep out of the barrel, a global name to
+ * document, a self-installing path nobody could turn off, and
+ * a second artifact to test. A bundler is the supported way
+ * to consume the SDK; `analytics.page()` is the supported way
+ * for a host with its own routing to report navigation.
  */
-const shared = {
+export default defineConfig({
   // There is no root tsconfig for tsup to inherit a target
   // from, so it would fall back to node16 — the wrong default
   // for a bundle that only ever runs in a browser.
@@ -33,21 +29,21 @@ const shared = {
   platform: "browser",
   sourcemap: true,
   outDir: "../dist",
+  entry: { analytics: "../analytics/index.ts" },
+  format: ["esm"],
 
   /**
-   * One file per build. Code splitting (tsup's default for
-   * ESM) would turn the jQuery adapter's dynamic `import()`
-   * into extra chunk files that have to ship next to
-   * analytics.js, which defeats the point of a `<script>`
-   * build. Without splitting esbuild inlines it instead.
+   * One file, no chunks. Code splitting (tsup's default for
+   * ESM) would emit extra chunk files that have to ship next
+   * to analytics.js; without it esbuild inlines everything.
    */
   splitting: false,
 
   /**
-   * Both bundles are `.js`. Left to its defaults tsup would
-   * emit analytics.mjs and analytics.iife.global.js, because
-   * nothing here declares `type: module` — the extension says
-   * nothing about the module system, the file's contents do.
+   * The bundle is `.js`. Left to its defaults tsup would emit
+   * analytics.mjs, because nothing here declares
+   * `type: module` — the extension says nothing about the
+   * module system, the file's contents do.
    */
   outExtension: () => ({ js: ".js" }),
 
@@ -60,27 +56,12 @@ const shared = {
    */
   dts: false,
 
+  /**
+   * No `clean`, even though the build writes into dist/:
+   * consumers may well have the previous bundle checked out,
+   * and a build that deletes files it did not create is a
+   * build that can lose work. The entry name is fixed, so a
+   * build overwrites its own file rather than accumulating.
+   */
   minify: false,
-} as const;
-
-/**
- * No `clean` in either config, even though both write into
- * dist/: tsup builds them in parallel, so whichever ran first
- * would see its output removed by the other. Both entries have
- * fixed names, so a build overwrites its own file rather than
- * accumulating anything.
- */
-export default defineConfig([
-  {
-    ...shared,
-    name: "esm",
-    entry: { analytics: "../analytics/index.ts" },
-    format: ["esm"],
-  },
-  {
-    ...shared,
-    name: "iife",
-    entry: { "analytics.iife": "../analytics/iife.ts" },
-    format: ["iife"],
-  },
-]);
+});

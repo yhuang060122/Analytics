@@ -1,11 +1,12 @@
 import type { DebugOptions } from "../debug/debug-controller";
+import type { ProbeFactory } from "./tracker";
 
 /**
  * Re-exported so the root barrel still carries it. The
  * definition lives next to the class that consumes it — it
  * used to be duplicated here.
  */
-export type { DebugOptions };
+export type { DebugOptions, ProbeFactory };
 
 export interface AnalyticsConfig {
   endpoint: string;
@@ -13,25 +14,6 @@ export interface AnalyticsConfig {
   batchSize?: number;
 
   flushInterval?: number;
-
-  /**
-   * How many times a failing batch is retried before the
-   * events are dropped. Defaults to 3.
-   */
-  maxRetries?: number;
-
-  /**
-   * Base delay before the first retry, doubling each time.
-   * Defaults to 1000ms, capped at 30s.
-   */
-  retryDelay?: number;
-
-  /**
-   * Hard cap on buffered events (default 500). When full, the
-   * oldest event is dropped rather than let the buffer grow
-   * without bound during an outage.
-   */
-  maxQueueSize?: number;
 
   /**
    * How long a request may be in flight before it is aborted
@@ -45,4 +27,32 @@ export interface AnalyticsConfig {
   headers?: Record<string, string>;
 
   debug?: DebugOptions;
+
+  /**
+   * Probes to wire up, in order. Each factory receives the
+   * instance as its `EventRecorder` and returns a `Tracker`.
+   *
+   * Registered but NOT started — `start()` still starts
+   * everything at once, exactly as it does for probes added by
+   * hand. That is the one rule worth remembering: this option
+   * decides *what* is wired, never *when* it runs.
+   *
+   * Hand-written equivalents stay available and mix freely:
+   *
+   * ```ts
+   * new Analytics({
+   *   endpoint,
+   *   probes: [recorder => new PageTracker(recorder)],
+   * });
+   *
+   * const click = new ClickTracker(analytics, { attribute });
+   * analytics.registerTracker(click);
+   * ```
+   *
+   * A factory that throws is reported and skipped. The
+   * alternative would be an exception from a constructor, which
+   * is a far worse failure than a probe that quietly is not
+   * there.
+   */
+  probes?: ProbeFactory[];
 }

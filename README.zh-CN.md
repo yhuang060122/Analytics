@@ -10,24 +10,25 @@
 
 ---
 
-## 快速上手
+## 快速开始
 
 ### 环境要求
 
-- **Node.js ≥ 20**（在 22.x 上开发并测试）
+- **Node.js ≥ 20**（在 22.x 上开发与测试）
 - **npm ≥ 9**
-- 无需任何全局安装。每个孤岛各自安装自己的工具。
+- 没有全局安装。每个孤岛装自己的工具。
 
 ### 安装
 
 ```bash
-npm --prefix demo install      # vite + typescript（跑 demo、编译测试都用它）
-npm --prefix build install     # tsup + typescript（打包用）
+npm --prefix demo install      # vite + typescript（跑 demo，也负责编译测试）
+npm --prefix build install     # tsup + typescript（打产物）
 ```
 
-`tests/` 什么都不用装 —— 它的脚本直接取用 `demo/node_modules` 里的 TypeScript。
+`tests/` 不用装任何东西 —— 它的脚本直接用 `demo/node_modules` 里的
+TypeScript。
 
-### 运行 demo
+### 跑 demo
 
 ```bash
 npm --prefix demo run dev
@@ -37,575 +38,398 @@ npm --prefix demo run dev
 
 | 页面 | 它演示什么 |
 | --- | --- |
-| `/`（index） | 点击、页面浏览、调试 Inspector、手动 flush |
-| `/portfolio` | 对 mock API 的 fetch 追踪 |
-| `/watchlist` | jQuery 风格请求、故障/重试行为 |
+| `/`（index） | 点击、页面浏览、手动事件、突发批量 |
+| `/portfolio` | 第二个页面，会话因此延续 |
+| `/watchlist` | 独立的手动事件 |
 
-SDK 实例在 `demo/src/analytics.ts` 里跨页面共享；调试工具条控件在
-`demo/src/inspector-toolbar.ts`。
+SDK 实例在 `demo/src/analytics.ts` 里跨页面共享。开了 `debug.console` 之后，
+流水线的每个阶段都会打进 devtools console，页面本身不挂任何调试 UI。
 
 dev server 内置了一个 **mock collector**（`demo/vite.config.ts`），
 让整条流水线可以端到端跑通：
 
-| 接口 | 用途 |
+| 端点 | 用途 |
 | --- | --- |
-| `POST /api/analytics/events` | 接收 SDK 批次，打印到终端 |
-| `GET /api/analytics/outage?state=on\|off` | 模拟 500，用来演练队列重试 |
-| `GET /api/portfolio` | portfolio 页的示例数据 |
-| `GET /api/news` | watchlist 页的示例数据 |
+| `POST /api/analytics/events` | 接收 SDK 批次，打到终端 |
+| `GET /api/analytics/outage?state=on\|off` | 模拟 500，用来演练丢弃路径 |
+| `GET /api/portfolio` | portfolio 页的样例数据 |
+| `GET /api/news` | watchlist 页的样例数据 |
 
 ### 常用命令
 
-| 做什么 | 命令 |
+| 目的 | 命令 |
 | --- | --- |
 | 跑 demo（dev server） | `npm --prefix demo run dev` |
-| demo 类型检查 + 构建 | `npm --prefix demo run build` |
-| 构建 SDK 产物 | `npm --prefix build run build` |
-| 跑测试套件 | `npm --prefix tests run test` |
+| 严格 typecheck + 构建 demo | `npm --prefix demo run build` |
+| 打 SDK 产物 | `npm --prefix build run build` |
+| 跑测试 | `npm --prefix tests run test` |
 
-- `npm --prefix tests run test` 先用 tsc 把 `analytics/` 编译到
-  `tests/.build`，再跑 `node --test`。改动 `core/` 或 `adapters/`
-  之后必须跑它。
-- `npm --prefix build run build` 产出 `dist/analytics.js`（ESM
-  barrel）和 `dist/analytics.iife.js`（自安装的 `<script>` 构建）。
+- `npm --prefix tests run test` 用 tsc 把 `analytics/` 编译到 `tests/.build`，
+  再跑 `node --test`。**改过 `analytics/` 下任何东西之后都要跑它。**
+- `npm --prefix build run build` 产出 `dist/analytics.js`，即 ESM barrel。
   见[构建](#构建)。
-- `npm --prefix demo run build` 用一份更严格的 TypeScript 配置
-  （`noUnusedLocals`、`verbatimModuleSyntax`）编译 demo —— 比 SDK
-  构建更严，提交前是个不错的最后检查。
+- `npm --prefix demo run build` 会用一份更严的 TypeScript 配置跑 demo
+  （`noUnusedLocals`、`verbatimModuleSyntax`），比 SDK 自身的构建还严 ——
+  提交前拿它再过一遍是个好检查。
 
 ---
 
-## 项目结构
-
-```
-analytics/                  SDK 本体
-  core/                     与框架无关的引擎 —— 永不 import adapters/
-    api/                    端口与 SDK 本身：Analytics、EventRecorder/Tracker
-                            （tracker.ts）
-    domain/                 event / context / session / id（id.ts 里是
-                            crypto → getRandomValues → Math.random 的降级链）
-    factory/                EventFactory：track()/page() → AnalyticsContext
-    queue/                  EventQueue：批处理、重试 + 退避、溢出丢弃
-    transport/              Destination 端口 + HttpDestination（HTTP POST，
-                            超时 + keepalive 门禁）
-    debug/                  DebugController、事件总线、插件注册表、
-                            console + inspector 两个内置插件
-    dom.ts                  hasDom() —— 构造期访问 DOM 的守卫
-    warn.ts                 warnOnce() —— 降级时"只警告一次、绝不静默"
-  adapters/                 探针 —— 依赖方向朝内（指向 core/）
-    browser/                ClickTracker、PageTracker、FetchTracker
-    network/                NetworkTrackerCore（统一的事件名/忽略规则）
-    jquery/                 JQueryAjaxTracker（$.ajax 全局事件）
-    angular/                createAnalyticsInterceptor（HttpClient）
-    detect.ts               运行时特性探测
-    page-context.ts         readPageContext() —— page 三元组唯一的出处
-  index.ts                  公开 barrel（不重导出框架适配器）
-  iife.ts                   <script> 构建入口 —— 带副作用、自安装
-
-demo/                       Vite 多页 demo + mock collector
-build/                      tsup 配置 → dist/analytics.js、dist/analytics.iife.js
-tests/                      node --test 套件（零依赖）
-dist/                       构建产物（已 gitignore）
-```
-
-唯一要紧的方向是：**core 永不 import adapters。** 适配器依赖朝内、只依赖
-core 的端口；装配发生在**组合根**（也就是你的应用）里 —— 构造探针，然后
-`analytics.registerTracker()` 交给 SDK 统一收尾。
-`tests/architecture.test.mjs` 机械地守着这条以及另外十几条不变量。
-
----
-
-## 分层
-
-```
-adapters/   探针：Click、Page、Network（fetch / jQuery / Angular）
-   | 依赖朝内
-   v
-core/       domain、factory、queue、transport、api、debug
-```
-
-**core 永不 import adapters。** 契约在 `core/api/tracker.ts` 里：
-
-- `EventRecorder` —— 探针对 SDK 能做什么（`track`、`page`）
-- `Tracker` —— 生命周期（`start`、`stop`）
-
-探针依赖 `EventRecorder`、实现 `Tracker`。装配发生在**组合根**（应用侧），
-从不发生在 core 内部。
-
-```ts
-import { Analytics } from "./analytics/core/api/analytics";
-import { PageTracker } from "./analytics/adapters/browser/page-tracker";
-import { ClickTracker } from "./analytics/adapters/browser/click-tracker";
-import { FetchTracker } from "./analytics/adapters/browser/fetch-tracker";
-
-const analytics = new Analytics({ endpoint: "/api/analytics/events" });
-
-const page = new PageTracker(analytics);
-const click = new ClickTracker(analytics);
-const fetch = new FetchTracker(analytics);
-
-analytics.registerTracker(page);
-analytics.registerTracker(click);
-analytics.registerTracker(fetch);
-
-analytics.start();
-```
-
-`registerTracker()` 只注册 —— `start()` 会启动每一个已注册的探针（探针在
-被启动之前什么都不会做）。`destroy()` 与 `unregisterTracker()` 会停掉探针；
-`await analytics.close()` 是可等待的版本。见[投递与销毁](#投递与销毁)。
-
-**结构上幂等。** 每个探针都继承 `BaseTracker`，由基类持有 running 标志。
-子类实现 `onStart()`/`onStop()`，不可能不小心重复注册监听器 —— 所以
-`start()` 调多次也是安全的。`canStart()` 是给运行时可能不存在的探针
-（jQuery）留的后门：此时 `start()` 让它保持停止状态，而不是半启动。
-
-## 一套 API，多种技术栈
-
-三个 transport 曾经各自复制自己的事件名、属性形状与忽略规则。现在这些
-归 `adapters/network/` 所有；每个框架适配器只把自己的生命周期翻译成
-`record()` 调用。
+## 目录结构
 
 ```
 analytics/
-  core/                      与框架无关的 SDK
-    api/  domain/  factory/  queue/  transport/  debug/
-  adapters/
-    browser/                 DOM 探针：click、page、fetch
-    network/                 <-- 共享的 network core
-      network-core.ts        命名、属性、忽略规则、
-                             状态分类、transport 标签
-    jquery/                  $.ajax 全局事件
-    angular/                 HttpClient 拦截器
-    detect.ts                运行时特性探测
-    page-context.ts          事件发生在哪；SSR 安全
-  index.ts                   公开 barrel
-  iife.ts                    <script> 构建入口 —— 带副作用
+  core/                     整个 SDK
+    api/                    端口与门面：Analytics，
+                            EventRecorder / Tracker / BaseTracker
+                            (tracker.ts)
+    probes/                 ClickTracker、PageTracker
+    domain/                 event / context / session / id
+                            （id.ts 里是 crypto → getRandomValues →
+                            Math.random 的降级链；page-context.ts 是
+                            那三个页面键的唯一来源）
+    factory/                EventFactory：track() / page() → AnalyticsContext
+    queue/                  EventQueue：批处理、溢出丢弃（无重试）
+    transport/              Destination 端口 + HttpDestination（HTTP POST，
+                            超时 + keepalive 门禁）
+    debug/                  DebugController、事件总线、插件注册表、
+                            一个 console 内置插件
+    dom.ts                  hasDom() —— 构造期访问 DOM 的守卫
+    warn.ts                 warnOnce() —— 降级时"只警告一次、绝不静默"
+  index.ts                  公开 barrel
+
+demo/                       Vite 多页 demo + mock collector
+build/                      tsup 配置 → dist/analytics.js
+tests/                      node --test 套件（零依赖）
+dist/                       构建产物（git-ignored）
 ```
 
-每个 transport 发出相同的两个事件名，并给自己打上标签：
+**没有 `adapters/` 这一层了。** 两个探针在 `core/probes/`，依赖
+`EventRecorder` 端口；装配发生在**组合根** —— 你的应用里 —— 在 `probes: [...]`
+里点名，或交给 `analytics.registerTracker()`。两种方式下引擎都不 import 探针，
+所以新增探针是宿主改动而不是引擎改动。`tests/architecture.test.mjs` 机械地守着
+这一条以及另外十几条不变量。
 
-```json
-{ "name": "API Request",
-  "properties": {
-    "method": "GET", "url": "/api/users", "status": 200,
-    "durationMs": 42, "transport": "fetch",
-    "pagePath": "/portfolio", "pageUrl": "...", "pageTitle": "..."
-  } }
+---
+
+## 事件流水线
+
+```
+probe.track(name, props)
+  → Analytics.track  → EventFactory.track  → createContext(session/url/referrer/UA)
+      └─ debug: CREATED
+  → EventQueue.enqueue（溢出时丢最旧 + debug: FAILED）
+      └─ debug: QUEUED → 满 batchSize 或定时器到 → flush()
+  → flush(): 窥视一个批次 → debug: FLUSHING → destination.send
+        被接受 → 出缓冲区
+        被拒收 → 丢弃，发一条 debug: FAILED · undeliverable
+  → HttpDestination → POST JSON {events}，debug: SENT / FAILED
 ```
 
-`transport` 是 `fetch`、`jquery` 或 `angular` —— 按它过滤，而不是按三个
-不同的事件名。
+`visibilitychange` / `beforeunload` 会触发最后一次 flush，恢复在线也会。
 
-这两个事件名**不允许按 transport 配置**。`successEventName` /
-`errorEventName` 曾经作为选项存在：从没人设置过它们，而它们的存在本身
-就在暗示"某个 transport 可以用别的事件名" —— 恰恰是这个模块存在的意义
-要禁止的事。`enrich()` 同理被删：它会允许某个栈多出别的栈没有的属性。
-
-### 适配器遵守的规则
-
-- **零包依赖。** `adapters/angular` 与 `adapters/jquery` 都不 import
-  `@angular/*` 或 `rxjs`；它们用结构化类型。因此一个 jQuery 项目构建时
-  永远不需要装 Angular，反之亦然。`HTTP_INTERCEPTORS` 也因同样理由留在
-  应用侧。
-- **无环境全局声明。** jQuery 适配器在运行时查找 `$`，所以没有
-  `declare const $` 去强迫消费者装 `@types/jquery`。
-- **绝不破坏宿主。** 框架缺失时 `start()` 变成 no-op；每一次观测都被
-  包起来，保证追踪失败不会让一次 HTTP 请求失败。
-- **结构上幂等。** 探针继承 `BaseTracker`、实现 `onStart()`/`onStop()`；
-  `running` 标志在基类里，探针不可能忘掉守卫而重复注册监听器。
-  `canStart()` 是给运行时可能不存在的探针留的钩子。
+---
 
 ## 入口
 
-没有 `init()`、也没有自动探测：你自己构建 SDK、自己装配探针。每个探针都
-针对实例构造、启动，然后注册进去以便统一销毁：
+没有 `init()`，也没有自动探测：你点名要哪些探针，SDK 负责装配。
+`probes` 收的是工厂函数：
 
 ```ts
 import { Analytics } from "analytics";
-import { PageTracker } from "analytics/adapters/browser/page-tracker";
-import { ClickTracker } from "analytics/adapters/browser/click-tracker";
-import { FetchTracker } from "analytics/adapters/browser/fetch-tracker";
+import { PageTracker } from "analytics/core/probes/page-tracker";
+import { ClickTracker } from "analytics/core/probes/click-tracker";
 
 const analytics = new Analytics({
   endpoint: "/api/analytics/events",
   batchSize: 20,
-});
 
-const page = new PageTracker(analytics);
-const click = new ClickTracker(analytics);
-const fetch = new FetchTracker(analytics, {
-  ignoreUrls: ["/internal/health"],
+  probes: [
+    recorder => new PageTracker(recorder),
+    recorder => new ClickTracker(recorder),
+  ],
 });
-
-analytics.registerTracker(page);
-analytics.registerTracker(click);
-analytics.registerTracker(fetch);
 
 analytics.start();
 ```
 
-`registerTracker()` 只注册 —— `start()` 会启动每一个已注册的探针（探针在
-被启动之前什么都不会做）。`destroy()` 与 `unregisterTracker()` 会停掉探针；
+**是工厂函数，不是类。** 探针构造函数需要 recorder，而 recorder 正是正在
+构造的那个对象 —— 所以 `probes: [PageTracker]` 根本不可能工作。传函数还有
+一个好处：选项照样能传到探针，
+`recorder => new ClickTracker(recorder, { attribute: "data-tap" })`。
+
+这也让 SDK 不必知道有哪些探针。`probes: ["page", "click"]` 那种写法需要在
+引擎内部维护一张"名字 → 类"的表，而那张表正是本项目刻意删掉的注册表。
+`architecture.test.mjs` 会在任何引擎文件 import 探针时让构建失败。
+
+**`probes` 决定*装配什么*，绝不决定*何时运行*。** 它只注册；启动全部探针的
+仍然是 `start()` 调用 —— 所以 page view 永远不会从构造函数里发出去。
+
+手写 `new` 照样能用，两者可以混用 —— 需要把某个探针留着以后再处理时很方便：
+
+```ts
+const click = new ClickTracker(analytics, { attribute: "data-tap" });
+analytics.registerTracker(click);
+```
+
+`registerTracker()` 只注册；`destroy()` 与 `unregisterTracker()` 停掉探针；
 `await analytics.close()` 是可等待的版本。见[投递与销毁](#投递与销毁)。
 
-「当前环境能不能用」这个问题由每个探针自己回答，而不是一个中央探测器：
-
-| 探针 | 构造 | `available` |
-| --- | --- | --- |
-| `PageTracker` | `new PageTracker(recorder)` | —（读 `window.location`） |
-| `ClickTracker` | `new ClickTracker(recorder, { attribute? })` | —（需要 DOM） |
-| `FetchTracker` | `new FetchTracker(recorder, { ignoreUrls?, normalizeUrl? })` | `window.fetch` 存在 |
-| `JQueryAjaxTracker` | `new JQueryAjaxTracker(recorder, opts)` | `jQuery`/`$` 有 `.ajax` |
-
-运行时缺失的探针在 `.start()` 时保持停止 —— `BaseTracker.canStart()` 是
-这个钩子。`FetchTracker` 会 patch `window.fetch` 并在 `stop()`/`destroy()`
-时还原；启动两次不会 patch 两次。
-
-### 探测
-
-`detect.ts` 是一个纯能力读取器 —— 它只报告运行时有什么，不安装任何东西：
-
-| 信号 | 结果 |
-|---|---|
-| `window.fetch` 是函数 | `fetch: true` |
-| `jQuery` / `$` 有 `.ajax` | `jquery: true` |
-| `window.angular` / `window.ng` | `angularjs` / `angularDevMode` |
-
-`$.ajax` 才是真正的信号，而不是那个裸的 `$` 全局 —— 别的库也认领 `$`。
-`window.angular` 只能证明 AngularJS 1.x —— Angular 2+ 在生产构建里不暴露
-可靠的全局，这就是 Angular 装配必须显式的原因。
-
-```ts
-import { detectEnvironment } from "analytics/adapters/detect";
-
-detectEnvironment();
-// { fetch: true, jquery: false, angularjs: false,
-//   angularDevMode: false, dom: true }
-```
-
-### jQuery 项目
-
-Script 标签 —— 无打包器、无 import：
-
-```html
-<script src="/vendor/jquery.min.js"></script>
-<script>
-  // 由 analytics.iife.js 自安装时读取。
-  window.analyticsOptions = { endpoint: "/api/analytics/events" };
-</script>
-<script src="/analytics.iife.js"></script>
-<!-- 从这之后 window.analytics 就存在了 -->
-```
-
-那个构建是唯一会自安装的产物；见[构建](#构建)。它装配三个内置探针
-（page、click、fetch），只在 DOMContentLoaded 时读一次
-`window.analyticsOptions` —— 这就是选项可以在 script 标签之后设置的原因。
-改成从 deferred module 里设置的话，那时还没东西可读：构建会警告一次、
-什么也不装。
-
-用打包器的话，手工装配 jQuery：
-
-```ts
-import { JQueryAjaxTracker } from "analytics/adapters/jquery";
-
-const jquery = new JQueryAjaxTracker(analytics);
-analytics.registerTracker(jquery);
-analytics.start();
-```
-
-顺序很关键：**jQuery 必须先加载。** 否则 `canStart()` 让它保持停止，页面
-照常工作 —— 你只是丢掉了 jQuery 追踪，没有别的。
-
-### Angular 项目
-
-```ts
-// app.config.ts
-import { provideHttpClient, withInterceptors } from "@angular/common/http";
-import { createAnalyticsInterceptor } from "analytics/adapters/angular";
-
-const analytics = new Analytics({ endpoint: "/api/analytics/events" });
-
-export const appConfig: ApplicationConfig = {
-  providers: [
-    provideHttpClient(
-      withInterceptors([createAnalyticsInterceptor(analytics)]),
-    ),
-  ],
-};
-```
-
-Angular 15+ 接受一个普通函数，所以不涉及装饰器、也不涉及 DI token。
-对更老的版本：
-
-```ts
-import { HTTP_INTERCEPTORS } from "@angular/common/http";
-import { createAnalyticsHttpInterceptor } from "analytics/adapters/angular";
-
-{
-  provide: HTTP_INTERCEPTORS,
-  useFactory: () => createAnalyticsHttpInterceptor(analytics),
-  multi: true,
-}
-```
-
-拦截器显式接收实例 —— 没有回退 recorder，不传的话事件会被丢弃并警告一次。
-
-## 入口点
-
-barrel 从不拉入框架适配器，所以在任何地方 import 根都是安全的：
+barrel 导出全部，所以 import 根入口就是消费者需要的全部：
 
 ```
-analytics/index.ts           core + browser + network + detect
-analytics/adapters/network/  NetworkTrackerCore
-analytics/adapters/jquery/   JQueryAjaxTracker
-analytics/adapters/angular/  createAnalyticsInterceptor（函数 + 类）
+analytics/index.ts    全部
 ```
-
-后两者刻意走各自的路径：这正是让 Angular 不进 jQuery bundle 的办法，
-因为 import 根时永远看不到它们。
 
 本 README 里的示例把 import 简写为 `analytics/…`。没有包可安装，所以把
 它们指向你放源码的地方即可 —— demo 用的是相对路径。
 
-## 边界情形
+### 两个探针
 
-**加载顺序。** jQuery 在 SDK 之前。Angular 无所谓 —— 拦截器在 bootstrap
-时、实例创建之后提供。
+| 探针 | 构造函数 | 需要 |
+| --- | --- | --- |
+| `PageTracker` | `new PageTracker(recorder)` | 一个 DOM（读 `window.location`） |
+| `ClickTracker` | `new ClickTracker(recorder, { attribute? })` | 一个 DOM |
 
-**重复上报。** 两道守卫，都容易丢：
+`ClickTracker` 会为任何带 `data-analytics="<名字>"` 的元素上报
+`Element Clicked`（用 `{ attribute }` 改属性名）。元素的文字**默认不上报**，
+除非它还带 `data-analytics-text` —— 见[隐私](#隐私)。
 
-- `BaseTracker.start()` 幂等，所以对同一个探针调两次不会叠加监听器。
-- SDK 自己的端点写死在 `DEFAULT_IGNORE_URLS` 里，且与 `ignoreUrls` 是
-  **合并**关系、永不替换。设了 `ignoreUrls: ["/health"]` 的用户依然无法
-  触发 上报 → `API Request` → 上报 的死循环。
+`PageTracker` 在启动时上报一个 `page` 事件，标签页隐藏或页面卸载时再上报一个
+`Page Duration`。
 
-重叠的适配器不会重复计数：`$.ajax` 处理器只为 jQuery 发起的请求触发，
-而 Angular 的 `HttpClient` 走 XHR，所以一个同时有 jQuery 和 Angular 的页面
-不会把同一次调用报两遍。如果应用在 Angular 里直接调 `$.ajax`，它可能把
-*不同的*调用报两遍 —— 那种情况按 `transport` 过滤即可。
+**结构上幂等。** 两者都继承 `BaseTracker`，由基类持有 running 标志。子类实现
+`onStart()`/`onStop()`，不可能不小心重复注册监听器 —— 所以 `start()` 调多次
+也是安全的。
 
-**SPA 导航。** `PageTracker` 在启动时上报一个 `page` 事件，标签页隐藏或
-卸载时再上报一个 `Page Duration`。它**不**监听 History API，所以客户端路由
-切换不算页面浏览 —— 从你的 router 里调用：
+**两个探针在无 DOM 时构造与启动都是安全的。** 服务端渲染会建出整条探针链，
+然后发现自己没有东西可监听，所以 `canStart()` 返回 `hasDom()`，
+`start()` 让探针保持停止而不是抛错。SDK 在任何地方都能构造、装配、启动、
+销毁；只有*记录事件*需要浏览器。
 
-```ts
-router.afterEach(to => analytics.page(to.fullPath));
-```
+### 隐私
 
-`page(path)` 缺省用 `location.pathname`，并把 `title` 放进属性里，可覆盖。
-曾经有个 `PageTracker.navigate()` 专干这个；从没人调用它，而一个需要应用
-手动的探针，其实就是实例上的一个方法调用。
+`Element Clicked` 只在元素显式用 `data-analytics-text` 声明时才带上它的
+`textContent`。这是刻意的：元素文字是最容易带个人数据的属性 —— 一句
+"Hi Sarah" 的问候、一段消息预览、一个旁边带着客户姓名的价格。键始终存在
+（未声明时为 `null`），这样属性 schema 不依赖被点击的是哪个元素。
 
-**全局污染。** 实例不会自己暴露到全局（demo 自己设 `window.analytics`，
-IIFE 构建也这么做）。`window.fetch` 会被 patch，但在 `stop()`/`destroy()`
-时恢复；要在其他包装 fetch 的库*之后* patch，否则它们会互相捕获。
-
-**没有 crypto、没有 storage。** `crypto.randomUUID` 只存在于安全上下文，
-所以纯 http 内网页与沙箱 iframe 里都没有 —— 隐私模式还可能直接拒绝
-`sessionStorage`。过去不加保护地读它们会在宿主应用还没做错任何事之前就从
-构造过程抛异常。现在 `core/domain/id.ts` 会一路降级：`crypto.getRandomValues`
-→ `Math.random`（每个分支产出同样的 v4 形状），`Session` 在 storage 拒绝时
-把 id 留在内存里，`track()` / `page()` 则把剩下的都吞掉并警告一次。
-事件可能被丢弃；页面照常工作。
-
-**点击里的个人数据。** `Element Clicked` 上报 `element`、`tag`、`id` 和
-`cssClass`，但**不**上报元素文本 —— 除非元素还带着
-`data-analytics-text`，否则 `text` 为 `null`。元素文本是那个例行携带个人
-数据的属性（"Hi Sarah"、一条消息预览），所以按元素 opt-in。键始终保留，
-这样属性 schema 不随点的是哪个元素而变。
-
-**SSR。** 三件事让 Node 渲染不抛异常：
-
-- `readPageContext()`（`adapters/page-context.ts`，每个探针共用）返回空串
-  而不是去摸 `document`。
-- jQuery / Angular 适配器在框架缺失时 no-op。
-- 一切在*构造期*访问 DOM 全局的代码都套在 `hasDom()`（`core/dom.ts`）里：
-  `new Analytics()` 只在 DOM 存在时才注册 `visibilitychange` /
-  `beforeunload` 监听，队列的 `online` 监听同理。
-
-仍然只有浏览器能做的只是*追踪*：`track()` 和 `page()` 会读 `location`、
-`document.title` 和 `navigator`。在服务端构造与销毁 SDK 是安全的；在服务端
-记录事件则不是。
+---
 
 ## 投递与销毁
 
-队列只有在 destination 接受之后才把批次发出去：
+队列只在 destination 接受之后才把批次发出去：
 
 ```
 track() → queued → flushing ──ok──▶ 移除
                       │
-                      └──fail──▶ 留在队列里，按退避重试
-                                  （retryDelay × 2ⁿ，封顶 30s）
-                                  超过 maxRetries → 丢弃，发一条
-                                  终态的 "failed" debug 事件
+                      └──fail──▶ 丢弃，发一条终态的
+                                  "failed · undeliverable"
+                                  debug 事件
 ```
 
 | 选项 | 默认值 | 含义 |
 | --- | --- | --- |
+| `endpoint` | — | 必填；批次 POST 到哪里 |
 | `batchSize` | `20` | 每个请求的事件数 |
 | `flushInterval` | `1000` | 自动 flush 前的毫秒数 |
-| `maxRetries` | `3` | 批次被丢弃前的重试次数 |
-| `retryDelay` | `1000` | 基础退避，翻倍，封顶 30s |
-| `maxQueueSize` | `500` | 满时丢弃最旧事件 |
 | `timeoutMs` | `10000` | 请求允许在途多久；`0` 关闭 |
+| `probes` | `[]` | 要装配的探针工厂；见[入口](#入口) |
+| `debug` | 关闭 | `{ enabled, console }`；见 [debug 插件](#debug-插件) |
+| `apiKey` / `headers` | — | 请求上的额外认证 / 头 |
 
-一次失败批次绝不会因为*暂时性*的断网而丢，`online` 事件会立即 flush 而
-不是干等退避。`flush()` 永不 reject —— 每个自动调用方都写
-`void this.flush()`，一次 rejection 会变成 unhandled promise rejection。
+缓冲区上限 500 条，**不可配置**。满了就丢最旧事件，并以
+`failed · queue-overflow` 上报 —— 与 `undeliverable` 是不同的 reason：
+前者的事件根本没离开过缓冲区，后者是发出去了但被拒。一个抬不上去的上限，
+就是不可能被误触的上限。
+
+**没有重试。** destination 拒收的批次一次之后就丢弃，并以
+`failed · undeliverable` 上报，让这次丢失是可见的而不是静默的。这是个
+明确的取舍：留着被拒的批次意味着一个永久坏掉的端点会不断撑大缓冲区，
+并且之后每次 flush 都重发同一份注定失败的负载。如果你的事件必须在弱网下
+存活，就由宿主自己发 —— `navigator.sendBeacon`，或者在
+`analytics.track()` 前面套一层自己的队列。
+
+`online` 事件仍会立即 flush：断网期间缓冲的事件没人送得出去，连接恢复
+正是一次全新的尝试 —— 这些事件本来就一次都没发过。
+
+`flush()` 永不 reject —— 每个自动调用方都写 `void this.flush()`，
+一次 rejection 会变成 unhandled promise rejection。
 
 一次 `flush()` 发现已有 flush 在跑时，会把那个 promise 原样交回，而不是
 立即 resolve，所以 `await flush()` 真正意味着"缓冲区已被处理完"、而不是
 "已安排了一次 flush"。这正是 `close()` 可信的原因。
 
 **永不响应的请求。** 黑洞路由或强制门户会让一个请求永远挂起，过去这会
-把队列停在一个永远 settle 不了的 promise 上 —— 没有重试、没有失败、靠
+把队列停在一个永远 settle 不了的 promise 上 —— 没有失败、没有上报、靠
 沉默丢事件。现在 transport 会挂 `AbortController`，把 `timeoutMs` 当作
-一次失败尝试，同一份重试预算照样生效。设 `timeoutMs: 0` 可退出。
+一次失败尝试，于是批次被丢弃并上报，而不是永远挂着。设 `timeoutMs: 0`
+可退出。
 
 **`keepalive` 只花在最后一发上。** 浏览器对这种方式在途的请求量有上限，
 所以把它花在普通批次上，正是让那个无法重试的请求失去名额的原因。因此
 每次 flush 默认关掉它，除了标签页隐藏 / `beforeunload` 那一次。超过
 ~60KB 的 body 也不能用它 —— 那些会被直接拒绝 —— 所以它们干脆不带 flag 地
 发出去。`navigator.sendBeacon` 刻意不用在最后一发上：它在知道任何东西是否
-送达之前就报告成功，而"到底到没到"正是队列重试逻辑依赖的东西。
+送达之前就报告成功，而"到底到没到"正是让丢失可被上报的关键。
+
+### debug 事件
+
+`emit()` 点都埋在引擎内部，所以观察者看得到整条流水线：
+
+| 阶段 | 何时 |
+| --- | --- |
+| `created` | 事件对象已存在 |
+| `queued` | 进了缓冲区 |
+| `flushing` | 有请求在为它在途 |
+| `sent` | destination 接受了 |
+| `failed` | 它没了 —— 看 reason |
+
+四种很不一样的结局共用 `failed`，只有 `reason` 能把它们分开：
+`queue-overflow`（根本没发出去就被丢）、`undeliverable`（被拒收，无重试）、
+`transport-error`（请求本身失败）和 `timeout`（不是被拒绝，而是对方从未
+应答）。`error` 保持自由文本并承载消息；要匹配请匹配 `reason`。
 
 销毁会释放实例拥有的一切：
 
-- `destroy()` —— 幂等；停掉每个探针、移除它自己的 `visibilitychange` /
-  `beforeunload` 监听、停掉队列的定时器和 `online` 监听，然后做最后一次
-  尽力而为的 flush。
-- `close()` —— 一样，但会等待 flush。当你需要确定缓冲区已空时用它
-  （测试、SPA 卸载）。
-- 两者之后，`track()` / `page()` 变成 no-op，`isDestroyed` 为 `true`。
+- `destroy()` —— 幂等；停掉每个探针、摘掉自己的
+  `visibilitychange` / `beforeunload` 监听器、停掉队列的定时器与
+  `online` 监听，然后做最后一次尽力 flush。
+- `close()` —— 可等待的版本：先 flush 再停，所以不会留下在途请求。
 
-SDK 注册的每个监听器都是有名字的字段，所以 `architecture.test.mjs` 会在
-有人加了监听却忘了对应的 `removeEventListener` 时报错。
+---
 
-## 调试插件
+## debug 插件
 
-`core/debug` 从根 barrel 导出，所以任何东西都能观察流水线而无需被接进
-SDK：
+debug 是与探针**不同的**扩展点：插件观察流水线，探针产生事件。它们不是
+一件事的两种叫法，也不能互相替代。
+
+`core/debug/` 只观察，从不参与投递。它的 `emit()` 点在引擎内部
+（factory、queue、transport），所以插件能看到宿主永远看不到的事件。
 
 ```ts
-import type { DebugEvent, DebugPlugin } from "analytics";
+import { CONSOLE_PLUGIN } from "analytics";
 
-const toDatadog: DebugPlugin = {
-  name: "datadog",
-  onEvent(event: DebugEvent) {
-    metrics.increment(`analytics.${event.stage}`);
+analytics.debug.registerDebugPlugin({
+  name: "my-sink",
+  onEvent(event) {
+    if (event.stage === "sent") myCounter.increment();
   },
-};
+});
 
-const off = analytics.debug.registerDebugPlugin(toDatadog);
-// ...
-off(); // 或：analytics.debug.unregisterDebugPlugin("datadog")
+analytics.debug.debugPlugins;          // ["console", "my-sink"]
+analytics.debug.unregisterDebugPlugin(CONSOLE_PLUGIN);
 ```
 
-- 注册一个已被占用的名字会**替换**掉之前的插件，这样热重载不可能把每个
-  事件投递两遍。
-- `stop?()` 是 teardown 钩子。它在 `unregister` 和 `Analytics.destroy()` /
-  `close()` 时运行，所以没有插件能比 SDK 活得久。
-- `debug.enabled` 为 false 时插件收不到任何东西 —— `emit()` 在到达总线前
-  就短路了。
-- 一条 `failed` 事件除了自由文本的 `error`，还带着 `reason`：
-  `queue-overflow`（根本没发出去就被丢）、`undeliverable`（SDK 停止重试）、
-  `transport-error`（请求本身失败）和 `timeout`（不是被拒绝，而是对方从未
-  应答）。匹配 `reason`，别匹配消息文本。
-- **插件不能搞崩页面。** `emit()` 把每个监听器包在各自的 try/catch 里：
+- **插件不能搞崩页面。** 每个插件各自包在自己的 try/catch 里：
   一个抛异常的插件过去会一路穿过 `DebugController`、`EventFactory` 冒进
   宿主应用自己的 click handler。现在它只警告一次，连续失败三次的插件会被
   退订（并从 `debugPlugins` 里移除），而不是被永远调用下去。
-- `analytics.debug.debugPlugins` 列出已挂载的名字。
+- **每个观察者都有名字。** 没有匿名 `subscribe()`。注册表点不出名字的订阅者，
+  就是 `destroy()` 摘不掉的订阅者 —— 名字正是重点，它让注册表成为唯一的入口，
+  因而是穷尽的。（这里原本还有一个公开的 event bus，它在自己的监听器集合之外
+  另存一份账，于是 `bus.subscribe(fn)` 能活得比它观察的 SDK 更久。）
+- `destroy()` / `close()` 会释放所有插件，所以宿主注册的插件不会活得比 SDK 长。
+  插件的 `stop()` 同样包在 try/catch 里，而且它的条目**先**离开注册表 ——
+  拆卸时抛错不会让一个已摘掉的插件还留在名单上。
 
-两个内置项也是插件，按名字安装：
+内置项只有一个，而且它也是普通插件，按名字安装：
 
 | 名字 | 模块 | 备注 |
 | --- | --- | --- |
 | `console` | `core/debug/console-plugin.ts` | 无状态；console 日志器 |
-| `inspector` | `core/debug/inspector-plugin.ts` | 持有 DOM 面板；`stop()` 移除它 |
 
-`debug: { console: true, inspector: true }` 因此意味着"安装这两个名字"，
-其中任何一个都可以像自定义插件那样被移除：
+`debug: { console: true }` 因此意味着"安装这个名字"，它也可以像自定义插件
+那样被移除。宿主自己注册了同名插件时，以宿主为准：这个开关的意思是"该有个
+console 日志器"，不是"不管现在挂的是什么都装一个上去"。
 
-```ts
-import { CONSOLE_PLUGIN } from "analytics";
-analytics.debug.unregisterDebugPlugin(CONSOLE_PLUGIN);
-```
-
-因为 inspector 的生命周期就是它那个插件的生命周期，`destroy()` 会连同面板
-一起移除它。
+---
 
 ## 构建
 
 ```
-npm --prefix build install        # 首次
+npm --prefix build install        # 一次
 npm --prefix build run build
 ```
 
-根目录没有 `package.json`：这个仓库是源码目录，不是包。需要安装的东西
-住在各自的目录、带着各自的 lockfile —— `demo/` 放 vite 和测试要用的
-typescript，`build/` 放 tsup 和打包器，`tests/` 放测试脚本、什么都不装。
-根目录没东西可装，也就意味着根目录没东西可忘。
+根目录没有 `package.json`：本仓库是源码目录，不是包。需要安装的东西都
+在自己的目录里、带自己的 lockfile —— `demo/` 放 vite 和测试用的
+typescript，`build/` 放 tsup 和打包器，`tests/` 只放测试脚本、什么都不装。
 
-`build/tsup.config.ts` 里：两个入口、两种格式、同一份源码：
+只产出一个 bundle：`dist/analytics.js` —— ESM 库入口，无副作用。
+import 它不会启动任何东西；要不要装配探针由你决定。
 
-| 文件 | 格式 | 用谁加载 |
-| --- | --- | --- |
-| `dist/analytics.js` | ESM，barrel | `<script type="module">`、打包器 |
-| `dist/analytics.iife.js` | IIFE，自安装 | `<script src="…">` |
+不产出 `.d.ts`：消费者从它 import 的 TypeScript 源码里拿类型，demo 就是
+这么做的。产出声明文件需要根目录有一个 typescript，而把构建收在 `build/`
+正是为了避免这个。
 
-这里的扩展名不承载任何模块系统含义：没东西声明 `type: module`，所以 Node
-会把 `analytics.js` 当 CommonJS 读、在 `export` 上报错。它是浏览器产物，
-不是任何东西去 resolve 的入口 —— 消费者直接 import TypeScript 源码。
+**没有 `<script>` 构建。** 过去还有一个 bundle：读一个 `window.analyticsOptions`
+全局，在 `DOMContentLoaded` 时自安装。它连同一类问题一起消失了 ——
+一个要挡在 barrel 之外的额外入口、一个要写进文档的全局名、一条没法关掉
+的自安装路径、一个要额外测试的产物。**打包器是消费这个 SDK 的支持方式。**
 
-这两条入口还带着一条规则：`analytics/` 里没有任何东西 import `iife.ts`。
-它只能通过 `build/tsup.config.ts` 被触达，因为通过 barrel 触达它意味着
-"import 这个库"会用页面恰好设好的选项安装 SDK。架构测试守着这条，也守着
-"根目录始终是源码目录"。
-
-有意不放进构建的东西：
-
-- **`.d.ts`** —— 消费者从他们 import 的 TypeScript 源码拿类型；demo 也
-  从源码构建。产出声明文件会把 typescript 从它现在所在的孤岛里拉出来。
-- **minification** —— 这些文件是给人读的，人正调试一个他们无法控制的
-  页面上的追踪问题。
-- **`clean`** —— 两个配置并行构建，谁先跑完谁可能被对方清掉。两个入口
-  名字固定，所以每次构建覆盖自己的文件；重命名其中一个，旧产物会一直留
-  到整个目录被删掉。
-
-`build/` 里有个奇怪的条目：`@rollup/rollup-win32-x64-msvc` 被钉成 optional
-dependency，因为 npm 会漏掉 rollup 的平台二进制（npm/cli#4828），而 tsup
-无论是否产出声明文件都要加载 rollup。npm 在其他平台上会忽略这个钉。
+---
 
 ## 测试
 
 ```
+npm --prefix tests install    # 没有东西要装
 npm --prefix tests run test
 ```
 
-无需安装 —— 脚本取用 `demo/` 里的 typescript。它把 core + adapters 用
-tsc 编译进 `tests/.build`，然后对它显式列出的文件跑 `node --test`：
-
 - `tracker-port.test.mjs` —— 探针只靠一个裸 `EventRecorder` 驱动，无需
-  `Analytics` 实例
-- `registry.test.mjs` —— 注册/销毁语义、监听计数、端到端事件流水线
-- `queue.test.mjs` —— 失败批次留在缓冲里并被重试、只在预算耗尽后才丢弃、
+  SDK 实例；点击文本是 opt-in
+- `registry.test.mjs` —— 注册/销毁语义、`probes` 装配（只注册不启动、选项能传到
+  探针、抛错的工厂被跳过）、监听计数、端到端事件流水线
+- `queue.test.mjs` —— 被拒批次一次即丢弃并上报、重试接口已彻底移除、
   `flush()` 永不 reject、溢出丢最旧、销毁清空每个监听器
 - `debug-plugin.test.mjs` —— 插件观察整条流水线、同名注册替换而非翻倍、
   unregister 静默解绑
-- `network.test.mjs` —— 三个 transport 发出相同的名字与属性；框架缺失时
-  每个探针 no-op；手动注册的 `FetchTracker` 只 patch 一次 fetch、销毁时还原、
-  且尊重 `ignoreUrls`
+- `architecture.test.mjs` —— 下面那些不变量
 - `robustness.test.mjs` —— 没有 `crypto.randomUUID`、storage 被禁用或缺失、
   抛异常的插件、永不 settle 的请求、`keepalive` 门禁、SSR 构造、并发
   `flush()` 共用一个请求、`close()` 排空缓冲区，外加 ids / factory /
   session / destination 的单元测试
-- `architecture.test.mjs` —— 断言 core 永不 import adapters、barrel 永不
-  拉入框架适配器、没有适配器 import `@angular/*` 或 `rxjs`、每个监听器都可
-  移除、script-tag 入口留在库之外、根目录没有 package.json、测试脚本真的
-  跑到了每个 `*.test.mjs`
 
-## TODO
+### 值得知道的不变量
 
-- 队列持久化（localStorage / IndexedDB），让事件能扛过刷新
+`architecture.test.mjs` 把它们写成断言，所以违反会**让测试红**，
+而不是等以后才发现：
+
+- 探针只 import `core/api/tracker` —— 绝不 import `Analytics` 门面，
+  正是这一点让它们能被孤立测试
+- 没有任何引擎文件 import 探针 —— 所以 `probes` 是一份工厂函数清单，
+  新增探针是宿主改动而不是引擎改动
+- 没有匿名的 debug 订阅 —— 每个观察者都有名字，`destroy()` 才够得着
+- `core/probes` 之外没有文件挂监听器或定时器，只有那三个拥有自己定时器
+  且每一个都成对移除的文件例外
+- 页面三键（`pagePath` / `pageUrl` / `pageTitle`）只从
+  `domain/page-context.ts` 读，别处不许拼
+- import 这个库不会启动任何东西 —— 任何模块都不得在 import 时构造或挂监听
+- SDK **不 import 任何包** —— 只有自己的相对模块
+- SDK 注册的每个监听器都能被移除
+- 根目录没有 `package.json`，`tests/` 不声明任何依赖
+
+---
+
+## 刻意不提供的
+
+- **SPA 路由变化不被追踪。** `PageTracker` 只在启动时读一次
+  `window.location`，所以客户端路由切换既不会产生第二个 `page` 事件，
+  也不会产生第二个 `Page Duration`。**这是分工，不是缺口**：
+  框架的路由本来就知道路由何时落定、参数是什么、是不是前进/后退。
+  让 SDK 去 patch 全局 History API 猜这些，只会比路由本身更不准 ——
+  而且 patch 的是页面上所有库共享的东西。
+
+  改为从路由上报：
+
+  ```ts
+  // Angular
+  router.events.pipe(filter(e => e instanceof NavigationEnd))
+    .subscribe(() => analytics.page());
+
+  // 原生 History API
+  addEventListener("popstate", () => analytics.page());
+  ```
+
+  `page()` 接受路径，所以比 URL 知道更多的路由可以多说一点：
+  `analytics.page("/orders/42")`。

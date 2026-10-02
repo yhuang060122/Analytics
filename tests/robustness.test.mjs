@@ -6,6 +6,8 @@ const env = installBrowser();
 const require = env.require;
 
 const { Analytics } = require("./.build/core/api/analytics.js");
+const { PageTracker } = require("./.build/core/probes/page-tracker.js");
+const { ClickTracker } = require("./.build/core/probes/click-tracker.js");
 const { EventFactory } = require("./.build/core/factory/event-factory.js");
 const { Session } = require("./.build/core/domain/session.js");
 const { createId } = require("./.build/core/domain/id.js");
@@ -15,7 +17,6 @@ const { HttpDestination } = require(
 const { DebugController } = require(
   "./.build/core/debug/debug-controller.js",
 );
-const { DebugEventBus } = require("./.build/core/debug/event-bus.js");
 
 /** v4 shape, including the version and variant nibbles. */
 const UUID =
@@ -315,21 +316,79 @@ test("a plugin that fails every time is eventually retired", () => {
 });
 
 test("one failure does not retire a plugin", () => {
-  const bus = new DebugEventBus();
+  const debug = new DebugController({ enabled: true });
 
   let calls = 0;
 
-  bus.subscribe(() => {
-    calls += 1;
-    if (calls === 1) throw new Error("transient");
+  debug.registerDebugPlugin({
+    name: "warming-up",
+    onEvent() {
+      calls += 1;
+      if (calls === 1) throw new Error("transient");
+    },
   });
+
+  const event = { stage: "created" };
 
   assert.doesNotThrow(() => {
-    bus.emit({ stage: "created" });
-    bus.emit({ stage: "created" });
+    debug.emit(event);
+    debug.emit(event);
   });
 
-  assert.equal(calls, 2, "the listener is still subscribed");
+  assert.equal(calls, 2, "the plugin is still subscribed");
+
+  // And a success resets the count, so a plugin that fails
+  // early and then behaves is never retired by the accumulation.
+  assert.deepEqual(debug.debugPlugins, ["warming-up"]);
+});
+
+test("a plugin that throws on unregister does not stay listed", () => {
+  const debug = new DebugController({ enabled: true });
+
+  debug.registerDebugPlugin({
+    name: "bad-teardown",
+    onEvent() {},
+    stop() {
+      throw new Error("teardown blew up");
+    },
+  });
+
+  // The entry is removed before stop() runs, so a throwing
+  // teardown cannot leave a detached plugin still advertised.
+  assert.doesNotThrow(() => debug.unregisterDebugPlugin("bad-teardown"));
+  assert.deepEqual(debug.debugPlugins, []);
+});
+
+test("every plugin is detached by destroy(), with no anonymous escape hatch", async () => {
+  // The bus this replaced accepted anonymous subscribers, and
+  // `teardown()` only walked the named registry — so a bare
+  // `bus.subscribe(fn)` outlived the SDK it was observing. There
+  // is no anonymous subscription any more, which makes the
+  // registry the only way in and therefore exhaustive.
+  const analytics = offlineAnalytics({ debug: { enabled: true } });
+
+  const seen = [];
+
+  analytics.debug.registerDebugPlugin({
+    name: "watcher",
+    onEvent: (event) => seen.push(event.stage),
+  });
+
+  analytics.track("Signed up");
+  assert.ok(seen.length > 0, "the plugin saw the event");
+
+  // `destroy()` is fire-and-forget: it tears plugins down inside
+  // a `.finally()` on the last flush, so a plugin still sees the
+  // final "sent". `close()` is the awaitable form, and this is
+  // the one place the difference is observable.
+  analytics.destroy();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  assert.deepEqual(
+    analytics.debug.debugPlugins,
+    [],
+    "destroy() must leave no plugin attached",
+  );
 });
 
 // ---------------------------------------------------------------
@@ -361,7 +420,7 @@ test("a timeout is reported as a timeout, not a transport error", async () => {
   const restore = hangForever();
 
   try {
-    const debug = new DebugController();
+    const debug = new DebugController({ enabled: true });
 
     const events = [];
 
@@ -370,7 +429,6 @@ test("a timeout is reported as a timeout, not a transport error", async () => {
       onEvent: event => events.push(event),
     });
 
-    debug.enable();
 
     const destination = new HttpDestination(
       { endpoint: "/api/analytics/events", timeoutMs: 30 },
@@ -467,6 +525,46 @@ test("the SDK can be constructed without a DOM (SSR)", () => {
     // Nothing here may touch window/document: no lifecycle
     // listeners, no online listener, no page read.
     assert.doesNotThrow(() => analytics.destroy());
+  } finally {
+    restoreDocument();
+    restoreWindow();
+  }
+});
+
+test("every probe survives construction and start without a DOM", () => {
+  // This case used to stop at the facade, which is exactly why
+  // PageTracker could read window.location in a field
+  // initialiser for months: the suite was green because it
+  // never built a probe on a runtime without a window.
+  //
+  // A server render constructs the whole chain — the probes
+  // included — and then has nothing to listen to. So every step
+  // has to be safe, and a probe with no DOM must end up stopped
+  // rather than half-started.
+  const restoreWindow = swap("window", undefined);
+  const restoreDocument = swap("document", undefined);
+
+  try {
+    const analytics = offlineAnalytics();
+
+    const page = new PageTracker(analytics);
+    const click = new ClickTracker(analytics);
+
+    assert.doesNotThrow(() => page.start(), "PageTracker.start()");
+    assert.doesNotThrow(() => click.start(), "ClickTracker.start()");
+
+    assert.equal(page.isRunning, false, "no DOM leaves it stopped");
+    assert.equal(click.isRunning, false, "no DOM leaves it stopped");
+
+    // And the whole chain at once, the way an app wires it.
+    assert.doesNotThrow(() => {
+      const fresh = offlineAnalytics();
+
+      fresh.registerTracker(new PageTracker(fresh));
+      fresh.registerTracker(new ClickTracker(fresh));
+      fresh.start();
+      fresh.destroy();
+    });
   } finally {
     restoreDocument();
     restoreWindow();
@@ -602,7 +700,7 @@ test("HttpDestination posts one batch with the configured headers", async () => 
   const seen = capture("fetch", async () => ({ ok: true, status: 200 }));
 
   try {
-    const debug = new DebugController();
+    const debug = new DebugController({ enabled: true });
 
     const destination = new HttpDestination(
       {
@@ -620,7 +718,6 @@ test("HttpDestination posts one batch with the configured headers", async () => 
       onEvent: event => sent.push(event),
     });
 
-    debug.enable();
 
     const payload = context();
 
@@ -652,7 +749,7 @@ test("a rejected request is reported as a transport error", async () => {
   const restore = swap("fetch", async () => ({ ok: false, status: 500 }));
 
   try {
-    const debug = new DebugController();
+    const debug = new DebugController({ enabled: true });
 
     const destination = new HttpDestination(
       { endpoint: "/api/analytics/events" },
@@ -666,7 +763,6 @@ test("a rejected request is reported as a transport error", async () => {
       onEvent: event => sent.push(event),
     });
 
-    debug.enable();
 
     await assert.rejects(
       () => destination.send([context()]),

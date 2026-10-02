@@ -1,6 +1,7 @@
-import { BaseTracker } from "../../core/api/tracker";
-import type { EventRecorder } from "../../core/api/tracker";
-import { readPageContext } from "../page-context";
+import { BaseTracker } from "../api/tracker";
+import type { EventRecorder } from "../api/tracker";
+import { hasDom } from "../dom";
+import { readPageContext } from "../domain/page-context";
 
 export interface ClickTrackerOptions {
   /**
@@ -35,6 +36,15 @@ export class ClickTracker extends BaseTracker {
 
     this.recorder = recorder;
     this.attribute = options.attribute ?? "data-analytics";
+  }
+
+  /**
+   * False without a DOM, so `start()` leaves the probe stopped
+   * instead of throwing. Server-side rendering constructs the
+   * whole probe chain; it just has nothing to listen to.
+   */
+  protected canStart(): boolean {
+    return hasDom();
   }
 
   protected onStart(): void {
@@ -91,8 +101,13 @@ export class ClickTracker extends BaseTracker {
         id:
           element.id || null,
 
+        // `getAttribute`, not `.className`: on an SVG element
+        // `className` is an `SVGAnimatedString` object, so the
+        // one non-JSON value in the payload came from here.
+        // The attribute is a plain string for every element, and
+        // an absent class stays null either way.
         cssClass:
-          element.className || null,
+          element.getAttribute("class") || null,
 
         ...readPageContext(),
       }

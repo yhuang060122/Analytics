@@ -20,11 +20,6 @@
   },
   "include": [
     "../analytics/index.ts",
-    "../analytics/iife.ts",
-    "../analytics/core/api/analytics.ts",
-    "../analytics/adapters/browser/auto-track.ts",
-    "../analytics/adapters/index.ts",
-    "../analytics/adapters/jquery/index.ts",
-    "../analytics/adapters/angular/index.ts"
+    "../analytics/core/api/analytics.ts"
   ]
 }

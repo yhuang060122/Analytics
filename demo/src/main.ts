@@ -1,6 +1,5 @@
 import "./style.css";
 import { analytics } from "./analytics";
-import { mountInspectorToolbar } from "./inspector-toolbar";
 
 const counterBtn =
   document.querySelector<HTMLButtonElement>("#counterBtn")!;
@@ -33,5 +32,3 @@ document
       analytics.track("Burst Event", { index });
     }
   });
-
-mountInspectorToolbar();

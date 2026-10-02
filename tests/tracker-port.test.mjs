@@ -5,11 +5,8 @@ import { installBrowser } from "./browser-stub.mjs";
 const env = installBrowser();
 const require = env.require;
 
-const { ClickTracker } = require("./.build/adapters/browser/click-tracker.js");
-const { PageTracker } = require("./.build/adapters/browser/page-tracker.js");
-const { FetchTracker } = require(
-  "./.build/adapters/browser/fetch-tracker.js",
-);
+const { ClickTracker } = require("./.build/core/probes/click-tracker.js");
+const { PageTracker } = require("./.build/core/probes/page-tracker.js");
 const { BaseTracker } = require("./.build/core/api/tracker.js");
 
 function fakeRecorder() {
@@ -29,13 +26,13 @@ test("ClickTracker works against a bare EventRecorder (no Analytics)", () => {
   assert.equal(env.count("doc", "click"), 1);
 
   const element = {
-    getAttribute: () => "Buy NVDA",
+    getAttribute: (name) =>
+      name === "data-analytics-text" ? null : name === "class" ? "btn" : "Buy NVDA",
     // Opted in, so its text is reported.
     hasAttribute: (name) => name === "data-analytics-text",
     tagName: "BUTTON",
     textContent: " Buy ",
     id: "buyBtn",
-    className: "btn",
   };
 
   env.fire("doc", "click", {
@@ -61,12 +58,12 @@ test("click text is opt-in: no attribute, no textContent", () => {
   env.fire("doc", "click", {
     target: {
       closest: () => ({
-        getAttribute: () => "Buy NVDA",
+        getAttribute: (name) =>
+          name === "class" ? "btn" : "Buy NVDA",
         hasAttribute: () => false,
         tagName: "BUTTON",
         textContent: " Buy Sarah's order ",
         id: "buyBtn",
-        className: "btn",
       }),
     },
   });
@@ -80,6 +77,60 @@ test("click text is opt-in: no attribute, no textContent", () => {
     false,
     "element text must not leave the page unless it is opted in",
   );
+
+  tracker.stop();
+});
+
+test("cssClass is a plain string, whatever the element is", () => {
+  const recorder = fakeRecorder();
+  const tracker = new ClickTracker(recorder);
+
+  tracker.start();
+
+  // An SVG element's `className` is an SVGAnimatedString object,
+  // so reading the property put a non-JSON value in the payload.
+  // The attribute is a string for every element, which is why
+  // that is what the probe reads.
+  const svgClass = { baseVal: "icon" };
+
+  env.fire("doc", "click", {
+    target: {
+      closest: () => ({
+        getAttribute: (name) =>
+          name === "class" ? "icon" : "Chart",
+        hasAttribute: () => false,
+        tagName: "svg",
+        textContent: "",
+        id: "",
+        className: svgClass,
+      }),
+    },
+  });
+
+  const properties = recorder.calls[0].properties;
+
+  assert.equal(properties.cssClass, "icon");
+  assert.equal(typeof properties.cssClass, "string");
+  assert.equal(
+    JSON.stringify(properties).includes("baseVal"),
+    false,
+    "no part of an SVGAnimatedString may reach the payload",
+  );
+
+  // An element with no class at all reports null, not "".
+  env.fire("doc", "click", {
+    target: {
+      closest: () => ({
+        getAttribute: (name) => (name === "class" ? null : "Bare"),
+        hasAttribute: () => false,
+        tagName: "DIV",
+        textContent: "",
+        id: "",
+      }),
+    },
+  });
+
+  assert.equal(recorder.calls[1].properties.cssClass, null);
 
   tracker.stop();
 });
@@ -212,24 +263,4 @@ test("canStart() false leaves the tracker stopped, not half-started", () => {
 
   assert.equal(tracker.starts, 1);
   assert.equal(tracker.isRunning, true);
-});
-
-test("FetchTracker restores window.fetch on stop", () => {
-  globalThis.window.fetch = globalThis.fetch;
-
-  const original = globalThis.window.fetch;
-
-  const tracker = new FetchTracker(fakeRecorder());
-
-  tracker.start();
-
-  assert.notEqual(globalThis.window.fetch, original);
-
-  tracker.stop();
-
-  assert.equal(globalThis.window.fetch, original, "global must be restored");
-
-  tracker.stop();
-
-  assert.equal(globalThis.window.fetch, original);
 });

@@ -114,7 +114,14 @@ export class Session {
   }
 
   /**
-   * Clear current session.
+   * Drop the current session, so the next `current()` mints a
+   * new one.
+   *
+   * Exists for the tests, which need each case to start from a
+   * clean session rather than inheriting the previous one's id.
+   * It is deliberately off the public barrel: a host that wants
+   * to end a session is describing something the SDK has no
+   * opinion about — it should say so in its own words.
    */
   static reset(): void {
     memorySession = undefined;

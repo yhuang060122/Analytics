@@ -1,15 +1,18 @@
 import { Analytics } from "../../analytics/core/api/analytics";
-import { ClickTracker } from "../../analytics/adapters/browser/click-tracker";
-import { PageTracker } from "../../analytics/adapters/browser/page-tracker";
-import { FetchTracker } from "../../analytics/adapters/browser/fetch-tracker";
+import { ClickTracker } from "../../analytics/core/probes/click-tracker";
+import { PageTracker } from "../../analytics/core/probes/page-tracker";
 
 /**
  * Composition root for the demo.
  *
- * The SDK no longer auto-detects or auto-installs probes: every
- * tracker is constructed, started and registered by hand. That
- * makes the wiring explicit and leaves the set of active probes
- * exactly what is listed below.
+ * The SDK has no auto-detection and no probe registry: the two
+ * probes are named here, as factories. A factory rather than a
+ * class because a probe needs the recorder in its constructor
+ * and the recorder is the object being constructed — which also
+ * means options still reach the probe.
+ *
+ * Nothing starts here. `probes` says *what* is wired; `start()`
+ * below is still what says *when* it runs.
  */
 const analytics = new Analytics({
   endpoint: "/api/analytics/events",
@@ -21,17 +24,13 @@ const analytics = new Analytics({
   debug: {
     enabled: true,
     console: true,
-    inspector: true,
   },
+
+  probes: [
+    recorder => new PageTracker(recorder),
+    recorder => new ClickTracker(recorder),
+  ],
 });
-
-const page = new PageTracker(analytics);
-const click = new ClickTracker(analytics);
-const fetch = new FetchTracker(analytics);
-
-analytics.registerTracker(page);
-analytics.registerTracker(click);
-analytics.registerTracker(fetch);
 
 analytics.start();
 

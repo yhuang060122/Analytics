@@ -8,10 +8,10 @@ const require = env.require;
 const { Analytics } = require("./.build/core/api/analytics.js");
 const {
   ClickTracker,
-} = require("./.build/adapters/browser/click-tracker.js");
+} = require("./.build/core/probes/click-tracker.js");
 const {
   PageTracker,
-} = require("./.build/adapters/browser/page-tracker.js");
+} = require("./.build/core/probes/page-tracker.js");
 
 const config = {
   endpoint: "/api/analytics/events",
@@ -199,9 +199,11 @@ test("event pipeline is unchanged: click -> queued -> flushing -> sent", async (
   analytics.registerTracker(click);
 
   const stages = [];
-  analytics.debug.bus.subscribe((event) =>
-    stages.push(`${event.stage}:${event.context.event.name}`),
-  );
+  analytics.debug.registerDebugPlugin({
+    name: "stages",
+    onEvent: (event) =>
+      stages.push(`${event.stage}:${event.context.event.name}`),
+  });
 
   const element = {
     getAttribute: () => "Buy NVDA",
@@ -235,4 +237,178 @@ test("event pipeline is unchanged: click -> queued -> flushing -> sent", async (
   );
 
   analytics.destroy();
+});
+
+// ---------------------------------------------------------------
+// config.probes — the same wiring, written as configuration
+// ---------------------------------------------------------------
+
+test("config.probes registers the probes without starting them", () => {
+  env.reset();
+
+  const starts = [];
+
+  const analytics = new Analytics({
+    ...config,
+    probes: [
+      () => ({ start: () => starts.push("a"), stop: () => {} }),
+      () => ({ start: () => starts.push("b"), stop: () => {} }),
+    ],
+  });
+
+  // The rule this option exists to keep: config decides *what*
+  // is wired, never *when* it runs. A config that auto-started
+  // would fire a page view from inside a constructor.
+  assert.deepEqual(starts, [], "nothing may run before start()");
+
+  analytics.start();
+  assert.deepEqual(starts, ["a", "b"], "start() still starts them all");
+
+  analytics.destroy();
+});
+
+test("a probe factory is handed the recorder, and needs nothing else", () => {
+  env.reset();
+
+  // The factory's only argument is the EventRecorder port — not
+  // the Analytics class. That is what keeps a probe testable and
+  // the SDK ignorant of which probes exist.
+  let received;
+
+  const analytics = new Analytics({
+    ...config,
+    probes: [
+      (recorder) => {
+        received = recorder;
+
+        return { start() {}, stop() {} };
+      },
+    ],
+  });
+
+  assert.equal(typeof received.track, "function");
+  assert.equal(typeof received.page, "function");
+
+  // It is the live instance, so recording through it works.
+  received.track("From the factory");
+  assert.equal(analytics.pending, 1);
+
+  analytics.destroy();
+});
+
+test("a probe factory may pass options through to its probe", () => {
+  env.reset();
+
+  const events = [];
+
+  const analytics = new Analytics({
+    ...config,
+    // Debug has to be on for the observer below to see anything,
+    // which is worth stating: a version of this test that read
+    // the batches instead would have passed while asserting
+    // nothing about which attribute matched.
+    debug: { enabled: true },
+    // The reason a factory is used instead of a class: options
+    // still reach the probe constructor.
+    probes: [
+      recorder =>
+        new ClickTracker(recorder, { attribute: "data-tap" }),
+    ],
+  });
+
+  analytics.debug.registerDebugPlugin({
+    name: "seen",
+    onEvent: (e) => {
+      if (e.stage === "created") events.push(e.context.event);
+    },
+  });
+
+  analytics.start();
+
+  // A `data-analytics` element, which is the DEFAULT attribute —
+  // this probe was told to look for `data-tap` instead.
+  env.fire("doc", "click", {
+    target: {
+      closest: (selector) =>
+        selector.includes("data-analytics")
+          ? {
+              getAttribute: (name) => (name === "class" ? null : "Wrong"),
+              hasAttribute: () => false,
+              tagName: "BUTTON",
+              textContent: "",
+              id: "",
+            }
+          : null,
+    },
+  });
+
+  // And the one it was told to look for.
+  env.fire("doc", "click", {
+    target: {
+      closest: (selector) =>
+        selector.includes("data-tap")
+          ? {
+              getAttribute: (name) =>
+                name === "data-tap" ? "Tapped" : null,
+              hasAttribute: () => false,
+              tagName: "BUTTON",
+              textContent: "",
+              id: "",
+            }
+          : null,
+    },
+  });
+
+  assert.deepEqual(
+    events.map((e) => e.properties.element),
+    ["Tapped"],
+    "the custom attribute is the one that matched",
+  );
+
+  analytics.destroy();
+});
+
+test("a throwing factory is skipped, and the rest still register", () => {
+  env.reset();
+
+  const starts = [];
+
+  const analytics = new Analytics({
+    ...config,
+    probes: [
+      () => {
+        throw new Error("cannot build this one");
+      },
+      () => ({ start: () => starts.push("survivor"), stop: () => {} }),
+    ],
+  });
+
+  // The alternative — letting it out — is an exception from a
+  // constructor, with a half-built instance attached to nothing.
+  assert.doesNotThrow(() => analytics.start());
+
+  assert.deepEqual(starts, ["survivor"]);
+
+  analytics.destroy();
+});
+
+test("config.probes and hand-written probes mix", () => {
+  env.reset();
+
+  const analytics = new Analytics({
+    ...config,
+    probes: [recorder => new PageTracker(recorder)],
+  });
+
+  const click = new ClickTracker(analytics);
+
+  analytics.registerTracker(click);
+  analytics.start();
+
+  assert.equal(click.isRunning, true);
+
+  // And destroy() reaches both, which is the property that
+  // makes the option safe to use.
+  analytics.destroy();
+  assert.equal(click.isRunning, false);
 });

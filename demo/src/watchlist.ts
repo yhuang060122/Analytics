@@ -1,6 +1,5 @@
 import "./style.css";
 import { analytics } from "./analytics";
-import { mountInspectorToolbar } from "./inspector-toolbar";
 
 const newsEl =
   document.querySelector<HTMLUListElement>("#news")!;
@@ -30,5 +29,3 @@ async function loadNews(): Promise<void> {
 loadNewsBtn.addEventListener("click", () => {
   void loadNews();
 });
-
-mountInspectorToolbar();

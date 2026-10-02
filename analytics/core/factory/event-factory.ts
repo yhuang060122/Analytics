@@ -1,10 +1,9 @@
 import { createId } from "../domain/id";
+import { Session } from "../domain/session";
 import type {
   AnalyticsContext,
   AnalyticsEvent
 } from "../domain";
-
-import { Session } from "../domain";
 
 import type { DebugController } from "../debug/debug-controller";
 

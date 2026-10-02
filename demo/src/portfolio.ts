@@ -1,6 +1,5 @@
 import "./style.css";
 import { analytics } from "./analytics";
-import { mountInspectorToolbar } from "./inspector-toolbar";
 
 interface Holding {
   symbol: string;
@@ -63,6 +62,5 @@ document
     });
   });
 
-mountInspectorToolbar();
-
 void refresh();
+

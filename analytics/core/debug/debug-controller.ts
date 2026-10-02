@@ -1,41 +1,86 @@
 // core/debug/debug-controller.ts
 
-import { DebugEventBus } from "./event-bus";
-import type { DebugInspector } from "./debug-inspector";
-import {
-  CONSOLE_PLUGIN,
-  createConsolePlugin,
-} from "./console-plugin";
-import {
-  INSPECTOR_PLUGIN,
-  InspectorDebugPlugin,
-} from "./inspector-plugin";
+import { warnOnce } from "../warn";
+import { CONSOLE_PLUGIN, createConsolePlugin } from "./console-plugin";
 import type { DebugEvent } from "./debug-event";
-import type { DebugPlugin } from "./plugin";
 
 export interface DebugOptions {
   enabled?: boolean;
   console?: boolean;
-  inspector?: boolean;
 }
+
+/**
+ * The debug port: anything that wants to observe the pipeline
+ * implements this instead of being wired into the engine.
+ *
+ * `onEvent` is the only required member; `stop()` is the
+ * teardown hook for a plugin that owns something — a timer, a
+ * socket, a subscription of its own. It is called on
+ * `unregisterDebugPlugin()` and when the SDK is destroyed, so a
+ * plugin never has to detach by hand.
+ *
+ * There is no `start()`: a plugin is built and started by
+ * whoever constructs it, which keeps the port to two members.
+ */
+export interface DebugPlugin {
+
+  /**
+   * Identity. Registering a plugin with a name that is already
+   * taken replaces the previous one instead of double-delivering
+   * every event to both copies — a hot reload would otherwise
+   * leave two of everything subscribed.
+   *
+   * A name is also what makes a plugin detachable. There is
+   * deliberately no anonymous subscription: a subscriber the
+   * SDK cannot name is a subscriber `destroy()` cannot remove,
+   * which is how the previous bus-based design leaked.
+   */
+  readonly name: string;
+
+  onEvent(event: DebugEvent): void;
+
+  /** Optional teardown. Called on unregister and on destroy. */
+  stop?(): void;
+
+}
+
+/**
+ * How many failures in a row earn a plugin its removal.
+ *
+ * Three, not one: a plugin may well throw on the first event
+ * because it is still warming up its own client. Throwing on
+ * *every* event is a plugin that is never going to work.
+ */
+const MAX_CONSECUTIVE_FAILURES = 3;
 
 interface PluginEntry {
   plugin: DebugPlugin;
-  unsubscribe: () => void;
+  failures: number;
 }
 
+/**
+ * The pipeline's observer registry.
+ *
+ * It used to delegate to a separate event bus, which meant two
+ * books of the same subscribers: this class kept a map by name,
+ * the bus a set of listeners plus a side table of failure
+ * counts, and the two were kept in step by an `onDrop` callback
+ * the bus fired whenever it retired a listener. One registry
+ * does the whole job, and there is nothing left that can fall
+ * out of sync — or survive `destroy()` without being listed.
+ */
 export class DebugController {
-
-  readonly bus = new DebugEventBus();
 
   private readonly plugins = new Map<string, PluginEntry>();
 
-  private enabled = false;
+  private readonly enabled: boolean;
 
   constructor(options: DebugOptions = {}) {
 
-    if (options.enabled) {
-      this.enable(options);
+    this.enabled = options.enabled === true;
+
+    if (this.enabled && options.console) {
+      this.installBuiltIn();
     }
 
   }
@@ -44,58 +89,34 @@ export class DebugController {
 
     if (!this.enabled) return;
 
-    this.bus.emit(event);
+    // Snapshot: retiring a plugin below mutates the map while
+    // this loop is running.
+    for (const name of [...this.plugins.keys()]) {
+
+      const entry = this.plugins.get(name);
+
+      if (!entry) continue;
+
+      this.deliver(name, entry, event);
+
+    }
 
   }
 
   /**
-   * The two built-ins are plugins like any other: the flags
-   * only decide which names get installed into the registry.
+   * Install or remove the built-in console logger. This is the
+   * one runtime switch the debug layer keeps: a host that
+   * enabled debug for a diagnostic can turn the noise back off
+   * without giving up the plugins it registered itself.
    */
-  enable(options: DebugOptions = {}): void {
-
-    this.enabled = true;
-
-    if (options.console) {
-      this.console(true);
-    }
-
-    if (options.inspector) {
-      this.inspector(true);
-    }
-
-  }
-
-  disable(): void {
-
-    this.enabled = false;
-
-    this.console(false);
-    this.inspector(false);
-
-  }
-
-  /** Install or remove the built-in console logger. */
   console(enable: boolean): void {
 
     if (enable) {
-      this.installBuiltIn(CONSOLE_PLUGIN);
+      this.installBuiltIn();
       return;
     }
 
     this.unregisterDebugPlugin(CONSOLE_PLUGIN);
-
-  }
-
-  /** Install or remove the built-in on-page panel. */
-  inspector(enable: boolean): void {
-
-    if (enable) {
-      this.installBuiltIn(INSPECTOR_PLUGIN);
-      return;
-    }
-
-    this.unregisterDebugPlugin(INSPECTOR_PLUGIN);
 
   }
 
@@ -104,25 +125,13 @@ export class DebugController {
    * without being wired into the SDK.
    *
    * Returns an unregister function, so `const off = register(p)`
-   * and `off()` read the same way as `bus.subscribe()` does.
-   *
-   * Registering the same `name` twice replaces the earlier
-   * plugin — a hot reload would otherwise leave two copies
-   * subscribed and deliver every event twice.
+   * and `off()` read the same way.
    */
   registerDebugPlugin(plugin: DebugPlugin): () => void {
 
     this.unregisterDebugPlugin(plugin.name);
 
-    // If this plugin ever fails often enough for the bus to
-    // drop it, drop it here too — otherwise `debugPlugins`
-    // would keep listing a subscriber that receives nothing.
-    const unsubscribe = this.bus.subscribe(
-      event => plugin.onEvent(event),
-      { onDrop: () => this.unregisterDebugPlugin(plugin.name) },
-    );
-
-    this.plugins.set(plugin.name, { plugin, unsubscribe });
+    this.plugins.set(plugin.name, { plugin, failures: 0 });
 
     return () => this.unregisterDebugPlugin(plugin.name);
 
@@ -139,9 +148,22 @@ export class DebugController {
 
     if (!entry) return false;
 
-    entry.unsubscribe();
-    entry.plugin.stop?.();
     this.plugins.delete(name);
+
+    // The entry is gone from the registry first, so a `stop()`
+    // that throws cannot leave a detached plugin still listed.
+    try {
+
+      entry.plugin.stop?.();
+
+    } catch (error) {
+
+      warnOnce(
+        "plugin-teardown-threw",
+        `a debug plugin's stop() threw; the SDK carried on (${String(error)})`,
+      );
+
+    }
 
     return true;
 
@@ -153,22 +175,7 @@ export class DebugController {
   }
 
   /**
-   * The on-page inspector panel, if the built-in is installed.
-   * Host apps can mount controls into it via
-   * `getInspector()?.getToolbar()`.
-   */
-  getInspector(): DebugInspector | undefined {
-
-    const entry = this.plugins.get(INSPECTOR_PLUGIN);
-
-    return entry?.plugin instanceof InspectorDebugPlugin
-      ? entry.plugin.getInspector()
-      : undefined;
-
-  }
-
-  /**
-   * Release every plugin, built-ins included. Called by
+   * Release every plugin, built-in included. Called by
    * `Analytics.destroy()` / `close()`, so a host-registered
    * plugin never outlives the SDK.
    */
@@ -180,16 +187,66 @@ export class DebugController {
 
   }
 
-  private installBuiltIn(name: string): void {
+  /**
+   * One plugin's turn, isolated.
+   *
+   * The try/catch used to live in the bus and the bookkeeping
+   * here, which is why a throwing plugin had two places to be
+   * forgotten. A failed plugin must not break the host: this
+   * runs inside the SDK's own event emission, which a
+   * `ClickTracker` reaches from the application's click
+   * handler. Observers are exactly the layer where swallowing a
+   * failure is right, because nothing downstream depends on
+   * them.
+   */
+  private deliver(
+    name: string,
+    entry: PluginEntry,
+    event: DebugEvent
+  ): void {
 
-    if (this.plugins.has(name)) return;
+    try {
 
-    const plugin =
-      name === CONSOLE_PLUGIN
-        ? createConsolePlugin()
-        : new InspectorDebugPlugin();
+      entry.plugin.onEvent(event);
 
-    this.registerDebugPlugin(plugin);
+      entry.failures = 0;
+
+    } catch (error) {
+
+      entry.failures += 1;
+
+      if (entry.failures < MAX_CONSECUTIVE_FAILURES) {
+
+        warnOnce(
+          "plugin-threw",
+          "a debug plugin threw while handling an event; " +
+            `the SDK carried on (${String(error)})`,
+        );
+
+        return;
+
+      }
+
+      warnOnce(
+        "plugin-disabled",
+        `a debug plugin failed ${entry.failures} times in a row and was ` +
+          `unsubscribed (${String(error)})`,
+      );
+
+      this.unregisterDebugPlugin(name);
+
+    }
+
+  }
+
+  private installBuiltIn(): void {
+
+    // A host plugin already holding the name wins: the flag
+    // means "there should be a console logger", not "install
+    // one over the top of whatever is already there".
+    if (this.plugins.has(CONSOLE_PLUGIN)) return;
+
+    this.registerDebugPlugin(createConsolePlugin());
 
   }
 

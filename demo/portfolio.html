@@ -13,8 +13,7 @@
         <a class="crumb" href="/index.html">← Back to demo home</a>
         <h1>Portfolio</h1>
         <p class="lead">
-          Automatic click tracking + FetchTracker
-          intercepting same-origin API calls.
+          Page views and automatic click tracking.
         </p>
       </header>
 
@@ -33,8 +32,9 @@
       <section class="card">
         <h2>Holdings</h2>
         <p>
-          Refresh calls <code>fetch("/api/portfolio")</code>,
-          so FetchTracker reports an extra API Request.
+          Refresh calls <code>fetch("/api/portfolio")</code>.
+          The SDK does not intercept it — network tracking was
+          removed, so this request produces no event.
         </p>
         <div class="row">
           <button class="btn" id="refreshBtn">Refresh Portfolio</button>

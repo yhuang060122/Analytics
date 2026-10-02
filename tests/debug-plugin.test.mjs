@@ -161,22 +161,48 @@ async function captureConsole(body) {
   return lines;
 }
 
-test("built-ins are installed by name, not hardcoded", () => {
+test("the built-in console logger is installed by name, not hardcoded", () => {
   env.reset();
 
   const analytics = new Analytics({
     ...config,
-    debug: { enabled: true, console: true, inspector: true },
+    debug: { enabled: true, console: true },
   });
 
-  assert.deepEqual(analytics.debug.debugPlugins, ["console", "inspector"]);
+  assert.deepEqual(analytics.debug.debugPlugins, ["console"]);
 
-  // Which also means they can be removed like any plugin.
+  // Which also means it can be removed like any plugin.
   assert.equal(analytics.debug.unregisterDebugPlugin("console"), true);
-  assert.deepEqual(analytics.debug.debugPlugins, ["inspector"]);
+  assert.deepEqual(analytics.debug.debugPlugins, []);
 
   analytics.debug.console(true);
-  assert.deepEqual(analytics.debug.debugPlugins, ["inspector", "console"]);
+  assert.deepEqual(analytics.debug.debugPlugins, ["console"]);
+});
+
+test("a host plugin already holding the name is not overwritten", () => {
+  env.reset();
+
+  const analytics = new Analytics({
+    ...config,
+    debug: { enabled: true, console: true },
+  });
+
+  const mine = plugin("console");
+
+  analytics.debug.unregisterDebugPlugin("console");
+  analytics.debug.registerDebugPlugin(mine);
+
+  // The flag means "there should be a console logger", not
+  // "install one over the top of whatever is already there".
+  analytics.debug.console(true);
+
+  assert.deepEqual(analytics.debug.debugPlugins, ["console"]);
+
+  analytics.track("Signup");
+  assert.ok(
+    mine.seen.length > 0,
+    "the host's own console plugin must still be the one attached",
+  );
 });
 
 test("the console plugin logs, and stops when unregistered", async () => {
@@ -202,28 +228,6 @@ test("the console plugin logs, and stops when unregistered", async () => {
   });
 
   assert.deepEqual(off, [], "no logging once the plugin is gone");
-});
-
-test("the inspector plugin owns the panel and removes it on stop", () => {
-  env.reset();
-
-  const analytics = new Analytics({
-    ...config,
-    debug: { enabled: true, inspector: true },
-  });
-
-  const panel = analytics.debug.getInspector();
-
-  assert.ok(panel, "the panel must exist right after init, not lazily");
-  assert.ok(panel.getToolbar(), "hosts mount controls into it");
-
-  analytics.debug.unregisterDebugPlugin("inspector");
-
-  assert.equal(
-    analytics.debug.getInspector(),
-    undefined,
-    "the panel must not outlive its plugin",
-  );
 });
 
 test("unregister runs the plugin's own teardown", async () => {
@@ -272,7 +276,7 @@ test("close() tears plugins down before it resolves", async () => {
 
   const analytics = new Analytics({
     ...config,
-    debug: { enabled: true, inspector: true },
+    debug: { enabled: true, console: true },
   });
 
   let stopped = 0;
@@ -288,5 +292,4 @@ test("close() tears plugins down before it resolves", async () => {
 
   assert.equal(stopped, 1);
   assert.deepEqual(analytics.debug.debugPlugins, []);
-  assert.equal(analytics.debug.getInspector(), undefined);
 });

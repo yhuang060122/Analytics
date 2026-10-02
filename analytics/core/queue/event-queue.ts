@@ -6,25 +6,6 @@ import type { Destination } from "../transport/destination";
 export interface EventQueueOptions {
   batchSize?: number;
   flushInterval?: number;
-
-  /**
-   * How many times a failing batch is retried before it is
-   * dropped. 0 means "one attempt, then drop".
-   */
-  maxRetries?: number;
-
-  /**
-   * Base delay before the first retry. Each further retry
-   * doubles it, capped at MAX_RETRY_DELAY.
-   */
-  retryDelay?: number;
-
-  /**
-   * Hard cap on buffered events. When the queue is full the
-   * oldest event is dropped, so a long outage can never grow
-   * the buffer without bound.
-   */
-  maxQueueSize?: number;
 }
 
 /**
@@ -41,12 +22,21 @@ export interface FlushOptions {
 const DEFAULT_OPTIONS: Required<EventQueueOptions> = {
   batchSize: 20,
   flushInterval: 1000,
-  maxRetries: 3,
-  retryDelay: 1000,
-  maxQueueSize: 500,
 };
 
-const MAX_RETRY_DELAY = 30_000;
+/**
+ * Hard cap on buffered events. When the queue is full the
+ * oldest event is dropped, so an endpoint that stays down
+ * cannot grow the buffer without bound.
+ *
+ * Not configurable, and that is a decision rather than an
+ * oversight: no caller ever set it, a cap you cannot raise is
+ * a cap you cannot hit by accident, and a host that genuinely
+ * needs a bigger buffer needs something other than a longer
+ * queue (it needs this SDK to retry, which it deliberately
+ * does not do — see the drop path in `drain()`).
+ */
+const MAX_BUFFERED_EVENTS = 500;
 
 export class EventQueue {
 
@@ -71,10 +61,6 @@ export class EventQueue {
 
   private timer?: number;
 
-  private retryTimer?: number;
-
-  private failures = 0;
-
   private autoFlush = true;
 
   constructor(
@@ -90,9 +76,10 @@ export class EventQueue {
       ...options,
     };
 
-    // A dead network is the normal cause of a failed batch,
-    // so recovering connectivity is worth a retry right away
-    // instead of waiting out the backoff.
+    // A page that was offline buffered events nobody could
+    // ship. Regaining connectivity is a good moment to try,
+    // and unlike a failed batch this is a fresh attempt at
+    // events that have never been sent.
     if (hasDom()) {
       window.addEventListener("online", this.handleOnline);
     }
@@ -100,7 +87,7 @@ export class EventQueue {
 
   enqueue(context: AnalyticsContext): void {
 
-    if (this.queue.length >= this.options.maxQueueSize) {
+    if (this.queue.length >= MAX_BUFFERED_EVENTS) {
       const dropped = this.queue.shift() as AnalyticsContext;
 
       // Debug → FAILED (terminal: it never even left)
@@ -138,9 +125,10 @@ export class EventQueue {
    * unhandled rejection, because every automatic caller does
    * `void this.flush()`.
    *
-   * Events are removed from the buffer only once the
-   * destination accepted them, so a failed batch stays queued
-   * and is retried with a backoff instead of being lost.
+   * A batch is removed only once the destination accepted it.
+   * A batch the destination refused is dropped, and reported
+   * as `FAILED · undeliverable` — there is no retry, so it is
+   * reported rather than silently absorbed.
    *
    * A flush already in progress owns the buffer: a second call
    * returns that same promise instead of resolving at once, so
@@ -167,7 +155,6 @@ export class EventQueue {
   private async drain(options?: FlushOptions): Promise<void> {
 
     this.clearTimer();
-    this.clearRetryTimer();
 
     while (this.queue.length > 0) {
 
@@ -199,22 +186,16 @@ export class EventQueue {
 
       if (!error) {
         this.queue.splice(0, batch.length);
-        this.failures = 0;
         continue;
       }
 
-      // The batch stays queued. Give up only once the retry
-      // budget is spent, so a short outage is survivable and
-      // a permanent one does not retry forever.
-      if (this.failures >= this.options.maxRetries) {
-        this.drop(batch, error);
-        this.failures = 0;
-        continue;
-      }
-
-      this.failures += 1;
-      this.scheduleRetry();
-      break;
+      // No retry budget: a batch that could not be delivered
+      // is reported and dropped. The alternative — holding it
+      // for a later attempt — means a permanently refused
+      // endpoint grows the buffer and every subsequent flush
+      // re-sends the same doomed batch, which is the shape of
+      // a bug report, not of resilience.
+      this.drop(batch, error);
 
     }
 
@@ -229,7 +210,6 @@ export class EventQueue {
 
     this.autoFlush = false;
     this.clearTimer();
-    this.clearRetryTimer();
 
     if (hasDom()) {
       window.removeEventListener("online", this.handleOnline);
@@ -237,19 +217,8 @@ export class EventQueue {
 
   }
 
-  clear(): void {
-    this.queue.length = 0;
-    this.failures = 0;
-    this.clearTimer();
-    this.clearRetryTimer();
-  }
-
   get size(): number {
     return this.queue.length;
-  }
-
-  get retrying(): boolean {
-    return this.retryTimer !== undefined;
   }
 
   private drop(
@@ -259,13 +228,16 @@ export class EventQueue {
 
     this.queue.splice(0, batch.length);
 
+    // Loud on purpose: with no retry, this event is simply
+    // gone. Whoever reads the pipeline has to be able to see
+    // that it went missing and why.
     batch.forEach(ctx =>
       this.debug.emit({
         stage: "failed",
         context: ctx,
         timestamp: Date.now(),
         reason: "undeliverable",
-        error: `dropped after ${this.options.maxRetries + 1} attempts: ${String(error)}`,
+        error: `dropped after one attempt: ${String(error)}`,
       })
     );
 
@@ -283,38 +255,12 @@ export class EventQueue {
 
   }
 
-  private scheduleRetry(): void {
-
-    if (!this.autoFlush) return;
-    if (this.retryTimer) return;
-
-    const delay = Math.min(
-      this.options.retryDelay * 2 ** (this.failures - 1),
-      MAX_RETRY_DELAY
-    );
-
-    this.retryTimer = window.setTimeout(() => {
-      this.retryTimer = undefined;
-      void this.flush();
-    }, delay);
-
-  }
-
   private clearTimer(): void {
 
     if (!this.timer) return;
 
     clearTimeout(this.timer);
     this.timer = undefined;
-
-  }
-
-  private clearRetryTimer(): void {
-
-    if (!this.retryTimer) return;
-
-    clearTimeout(this.retryTimer);
-    this.retryTimer = undefined;
 
   }
 

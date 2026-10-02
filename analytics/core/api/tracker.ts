@@ -38,14 +38,31 @@ export interface Tracker {
 }
 
 /**
+ * How a probe is built when the host wants the wiring to read
+ * as configuration.
+ *
+ * A factory rather than a class, and that is the whole trick:
+ * a probe needs the recorder in its constructor, and the
+ * recorder is the very object being constructed. Passing
+ * `PageTracker` itself would mean the SDK holding a reference
+ * to a probe class and looking it up by name — the registry
+ * that was deliberately deleted. A function keeps the
+ * dependency where it was: the host names the probe, the SDK
+ * only calls something that returns a `Tracker`.
+ *
+ * Which also means options still reach the probe:
+ * `recorder => new ClickTracker(recorder, { attribute: "…" })`.
+ */
+export type ProbeFactory = (recorder: EventRecorder) => Tracker;
+
+/**
  * Base class that makes that idempotency impossible to get
  * wrong.
  *
  * Every probe used to hand-roll `private running = false` plus
- * the two guards, and one of them (FetchTracker) invented a
- * second idiom with an `originalFetch` sentinel instead. Two
- * probes shipped with the guard missing, which double-registered
- * their listeners.
+ * the two guards, and one of them invented a second idiom with
+ * an `originalFetch` sentinel instead. Two probes shipped with
+ * the guard missing, which double-registered their listeners.
  *
  * Subclasses implement `onStart()` / `onStop()` and never touch
  * the flag. `canStart()` is the escape hatch for probes whose
