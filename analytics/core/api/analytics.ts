@@ -121,10 +121,26 @@ export class Analytics implements EventRecorder {
 
   /**
    * Register a probe. It is NOT started here: when to
-   * start is the composition root's decision.
+   * start is the composition root's decision — call
+   * `start()` once the probes are registered, or start
+   * each probe by hand.
    */
   registerTracker(tracker: Tracker): void {
     this.trackers.push(tracker);
+  }
+
+  /**
+   * Start every registered probe.
+   *
+   * `Tracker.start()` is idempotent, so a probe already
+   * running is unaffected; one whose runtime is missing
+   * (its `canStart()` returns false) simply stays stopped
+   * and can be started later once the runtime appears.
+   */
+  start(): void {
+    for (const tracker of this.trackers) {
+      tracker.start();
+    }
   }
 
   /**

@@ -84,13 +84,11 @@ function installFromGlobal(): void {
   const click = new ClickTracker(analytics);
   const fetch = new FetchTracker(analytics);
 
-  page.start();
-  click.start();
-  fetch.start();
-
   analytics.registerTracker(page);
   analytics.registerTracker(click);
   analytics.registerTracker(fetch);
+
+  analytics.start();
 
   (scope as Record<string, unknown>)["analytics"] = analytics;
 }

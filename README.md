@@ -150,17 +150,15 @@ const page = new PageTracker(analytics);
 const click = new ClickTracker(analytics);
 const fetch = new FetchTracker(analytics);
 
-page.start();
-click.start();
-fetch.start();
-
 analytics.registerTracker(page);
 analytics.registerTracker(click);
 analytics.registerTracker(fetch);
+
+analytics.start();
 ```
 
-`registerTracker()` only registers — starting is the caller's
-decision (a probe does nothing until you call `.start()`).
+`registerTracker()` only registers — `start()` starts every
+registered probe (a probe does nothing until you start it).
 `destroy()` and `unregisterTracker()` stop probes;
 `await analytics.close()` is the awaitable variant. See
 [Delivery & teardown](#delivery--teardown).
@@ -168,9 +166,10 @@ decision (a probe does nothing until you call `.start()`).
 **Idempotent by construction.** Every probe extends
 `BaseTracker`, which owns the running flag. Subclasses implement
 `onStart()`/`onStop()` and cannot double-register their listeners
-by accident. `canStart()` is the escape hatch for a probe whose
-runtime may not exist (jQuery): `start()` then leaves it stopped
-instead of half-started.
+by accident — so `start()` is safe to call more than once.
+`canStart()` is the escape hatch for a probe whose runtime may
+not exist (jQuery): `start()` then leaves it stopped instead of
+half-started.
 
 ## One API, several stacks
 
@@ -259,17 +258,16 @@ const fetch = new FetchTracker(analytics, {
   ignoreUrls: ["/internal/health"],
 });
 
-page.start();
-click.start();
-fetch.start();
-
 analytics.registerTracker(page);
 analytics.registerTracker(click);
 analytics.registerTracker(fetch);
+
+analytics.start();
 ```
 
-`registerTracker()` only registers — a probe does nothing until you
-call `.start()`. `destroy()` and `unregisterTracker()` stop probes;
+`registerTracker()` only registers — `start()` starts every
+registered probe (a probe does nothing until you start it).
+`destroy()` and `unregisterTracker()` stop probes;
 `await analytics.close()` is the awaitable variant. See
 [Delivery & teardown](#delivery--teardown).
 
@@ -339,8 +337,8 @@ With a bundler, wire jQuery by hand:
 import { JQueryAjaxTracker } from "analytics/adapters/jquery";
 
 const jquery = new JQueryAjaxTracker(analytics);
-jquery.start();
 analytics.registerTracker(jquery);
+analytics.start();
 ```
 
 Order matters: **jQuery must load first.** If it does not, the

@@ -34,6 +34,46 @@ test("registerTracker only registers, it does not start", () => {
   assert.equal(env.count("doc", "click"), 0);
 });
 
+test("start() starts every registered tracker", () => {
+  env.reset();
+
+  const analytics = new Analytics(config);
+
+  const started = [];
+  analytics.registerTracker({
+    start: () => started.push("a"),
+    stop: () => {},
+  });
+  analytics.registerTracker({
+    start: () => started.push("b"),
+    stop: () => {},
+  });
+
+  analytics.start();
+
+  assert.deepEqual(started, ["a", "b"]);
+});
+
+test("start() forwards to each tracker exactly once per call", () => {
+  env.reset();
+
+  const analytics = new Analytics(config);
+
+  let starts = 0;
+  analytics.registerTracker({
+    start: () => (starts += 1),
+    stop: () => {},
+  });
+
+  analytics.start();
+  analytics.start();
+
+  // Idempotency is the tracker's contract (BaseTracker), not
+  // Analytics.start()'s — it simply forwards, so a plain object
+  // is called once per start().
+  assert.equal(starts, 2);
+});
+
 test("destroy() stops every registered tracker", () => {
   env.reset();
 

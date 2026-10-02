@@ -144,23 +144,21 @@ const page = new PageTracker(analytics);
 const click = new ClickTracker(analytics);
 const fetch = new FetchTracker(analytics);
 
-page.start();
-click.start();
-fetch.start();
-
 analytics.registerTracker(page);
 analytics.registerTracker(click);
 analytics.registerTracker(fetch);
+
+analytics.start();
 ```
 
-`registerTracker()` 只注册，不启动 —— 探针在调用 `.start()` 之前什么都不会做；
-何时启动是调用方的决定。`destroy()` 与 `unregisterTracker()` 会停掉探针；
+`registerTracker()` 只注册 —— `start()` 会启动每一个已注册的探针（探针在
+被启动之前什么都不会做）。`destroy()` 与 `unregisterTracker()` 会停掉探针；
 `await analytics.close()` 是可等待的版本。见[投递与销毁](#投递与销毁)。
 
 **结构上幂等。** 每个探针都继承 `BaseTracker`，由基类持有 running 标志。
-子类实现 `onStart()`/`onStop()`，不可能不小心重复注册监听器。`canStart()`
-是给运行时可能不存在的探针（jQuery）留的后门：此时 `start()` 让它保持
-停止状态，而不是半启动。
+子类实现 `onStart()`/`onStop()`，不可能不小心重复注册监听器 —— 所以
+`start()` 调多次也是安全的。`canStart()` 是给运行时可能不存在的探针
+（jQuery）留的后门：此时 `start()` 让它保持停止状态，而不是半启动。
 
 ## 一套 API，多种技术栈
 
@@ -240,18 +238,16 @@ const fetch = new FetchTracker(analytics, {
   ignoreUrls: ["/internal/health"],
 });
 
-page.start();
-click.start();
-fetch.start();
-
 analytics.registerTracker(page);
 analytics.registerTracker(click);
 analytics.registerTracker(fetch);
+
+analytics.start();
 ```
 
-`registerTracker()` 只注册 —— 探针在调用 `.start()` 之前什么都不会做。
-`destroy()` 与 `unregisterTracker()` 会停掉探针；`await analytics.close()`
-是可等待的版本。见[投递与销毁](#投递与销毁)。
+`registerTracker()` 只注册 —— `start()` 会启动每一个已注册的探针（探针在
+被启动之前什么都不会做）。`destroy()` 与 `unregisterTracker()` 会停掉探针；
+`await analytics.close()` 是可等待的版本。见[投递与销毁](#投递与销毁)。
 
 「当前环境能不能用」这个问题由每个探针自己回答，而不是一个中央探测器：
 
@@ -314,8 +310,8 @@ Script 标签 —— 无打包器、无 import：
 import { JQueryAjaxTracker } from "analytics/adapters/jquery";
 
 const jquery = new JQueryAjaxTracker(analytics);
-jquery.start();
 analytics.registerTracker(jquery);
+analytics.start();
 ```
 
 顺序很关键：**jQuery 必须先加载。** 否则 `canStart()` 让它保持停止，页面

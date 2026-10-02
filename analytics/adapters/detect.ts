@@ -3,10 +3,11 @@
 /**
  * Runtime feature detection.
  *
- * The point is not convenience, it is isolation: a jQuery-only
- * page must never touch Angular code, and a page with neither
- * must not crash. Detection is what lets one bundle serve
- * several stacks.
+ * A plain capability reader: it reports what the runtime has,
+ * it installs nothing. Probes ask their own runtime whether
+ * they can start (via `BaseTracker.canStart()`); these helpers
+ * exist for callers that want to gate wiring themselves, and
+ * keep a jQuery-only page from ever touching Angular code.
  */
 
 export interface JQueryCollectionLike {

@@ -29,13 +29,11 @@ const page = new PageTracker(analytics);
 const click = new ClickTracker(analytics);
 const fetch = new FetchTracker(analytics);
 
-page.start();
-click.start();
-fetch.start();
-
 analytics.registerTracker(page);
 analytics.registerTracker(click);
 analytics.registerTracker(fetch);
+
+analytics.start();
 
 // Also sets window.analytics for console poking.
 (globalThis as Record<string, unknown>)["analytics"] = analytics;
