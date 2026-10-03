@@ -9,18 +9,13 @@ const { Analytics } = require("./.build/core/api/analytics.js");
 const { PageTracker } = require("./.build/core/probes/page-tracker.js");
 const { ClickTracker } = require("./.build/core/probes/click-tracker.js");
 const { EventFactory } = require("./.build/core/factory/event-factory.js");
-const { Session } = require("./.build/core/domain/session.js");
-const { createId } = require("./.build/core/domain/id.js");
+const { readSessionId } = require("./.build/core/domain/session-id.js");
 const { HttpDestination } = require(
   "./.build/core/transport/http-destination.js",
 );
 const { DebugController } = require(
   "./.build/core/debug/debug-controller.js",
 );
-
-/** v4 shape, including the version and variant nibbles. */
-const UUID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 /**
  * Swap a global for the duration of a test.
@@ -113,74 +108,70 @@ function context() {
 // build a page event.
 // ---------------------------------------------------------------
 
-test("the session id survives a reload through sessionStorage", () => {
-  Session.reset();
+test("the SDK reads the host's correlation id and never writes one", () => {
+  env.reset();
 
-  const first = Session.current();
+  // Nothing written: no id, and the SDK does not fill the gap.
+  assert.equal(readSessionId(), null);
 
-  assert.match(first.id, UUID);
+  // The host writes; the SDK reads. One key, documented in
+  // session-id.ts, and nothing else.
+  globalThis.sessionStorage.setItem("analytics.session", "corr-abc");
 
+  assert.equal(readSessionId(), "corr-abc");
+
+  // The load-bearing half. An SDK that minted its own id would
+  // report something here, and everything downstream would then
+  // have two identifiers meaning "this visit" — a host one that
+  // joins up in the backend and an SDK one that joins up nowhere.
   assert.equal(
     globalThis.sessionStorage.getItem("analytics.session"),
-    first.id,
+    "corr-abc",
+    "reading must not rewrite the value it read",
   );
-
-  Session.reset();
-
   assert.equal(
-    globalThis.sessionStorage.getItem("analytics.session"),
-    null,
+    readSessionId(),
+    "corr-abc",
+    "and reading twice must not have changed it either",
   );
+
+  env.reset();
 });
 
-test("createId() keeps producing uuids as crypto disappears", () => {
-  const webcrypto = globalThis.crypto;
+test("a blank correlation id reads as null, not as an empty group", () => {
+  env.reset();
 
-  // 1. the real thing
-  assert.match(createId(), UUID);
+  // A host whose id turned out to be blank will happily write
+  // "". Reporting that would be worse than reporting nothing: it
+  // is a value, so a collector would group by it and merge every
+  // such visit into one.
+  globalThis.sessionStorage.setItem("analytics.session", "");
 
-  // 2. no randomUUID (http sites, sandboxed iframes)
-  const noRandomUUID = swap("crypto", {
-    getRandomValues: bytes => webcrypto.getRandomValues(bytes),
-  });
+  assert.equal(readSessionId(), null);
 
-  try {
-    const ids = new Set();
+  env.reset();
+});
 
-    for (let i = 0; i < 20; i += 1) {
-      const id = createId();
+test("a late-written correlation id is picked up on the next event", () => {
+  env.reset();
 
-      assert.match(id, UUID, "getRandomValues branch");
-      ids.add(id);
-    }
+  const factory = new EventFactory(new DebugController());
 
-    assert.equal(ids.size, 20, "no collisions");
-  } finally {
-    noRandomUUID();
-  }
+  assert.equal(factory.track("Before login").sessionId, null);
 
-  // 3. no crypto at all
-  const noCrypto = swap("crypto", undefined);
+  // The host logs in mid-visit and writes its id. A value latched
+  // at construction — which is what the old in-memory session
+  // effectively was — would keep reporting the absence until
+  // reload, so the events either side of the login could not be
+  // joined up on the server.
+  globalThis.sessionStorage.setItem("analytics.session", "corr-late");
 
-  try {
-    const ids = new Set();
+  assert.equal(factory.track("After login").sessionId, "corr-late");
 
-    for (let i = 0; i < 20; i += 1) {
-      const id = createId();
-
-      assert.match(id, UUID, "Math.random branch");
-      ids.add(id);
-    }
-
-    assert.equal(ids.size, 20, "no collisions");
-  } finally {
-    noCrypto();
-  }
+  env.reset();
 });
 
 test("no crypto.randomUUID (non-secure context) still tracks", () => {
-  Session.reset();
-
   const restore = swap("crypto", {});
 
   try {
@@ -231,21 +222,31 @@ test("disabled sessionStorage still tracks, once warned", () => {
   }
 });
 
-test("the session falls back to memory instead of throwing", () => {
+test("no sessionStorage at all is a null id, not a minted one", () => {
   const restore = swap("sessionStorage", undefined);
 
   try {
-    Session.reset();
+    // SSR, or a runtime where storage was never exposed. The
+    // answer is the honest one — there is no correlation id to
+    // report — and it costs nothing: the payload has the key
+    // either way, so a collector sees `null` rather than a gap.
+    //
+    // This case used to be the one that made the in-memory
+    // fallback look necessary. It was not: the fallback existed
+    // to give a *minted* id somewhere to live, and there is no
+    // minted id left to keep.
+    assert.equal(readSessionId(), null);
 
-    const first = Session.current();
+    const factory = new EventFactory(new DebugController());
 
-    // Stable for the page, which is the point: without this the
-    // SDK would mint a new session id per event.
-    assert.equal(Session.current().id, first.id);
+    const tracked = factory.track("Signed up");
 
-    Session.reset();
-
-    assert.notEqual(Session.current().id, first.id);
+    assert.equal(tracked.sessionId, null);
+    assert.equal(
+      "sessionId" in tracked,
+      true,
+      "the key stays, so the schema does not change with the value",
+    );
   } finally {
     restore();
   }
@@ -536,17 +537,42 @@ test("track() builds the whole context, not just the event", () => {
   assert.equal(one.event.type, "track");
   assert.equal(one.event.name, "Signed up");
   assert.deepEqual(one.event.properties, { plan: "pro" });
-  assert.match(one.event.id, UUID);
   assert.ok(!Number.isNaN(Date.parse(one.event.timestamp)));
+
+  // No `id`: the collector assigns the primary key, and nothing
+  // in this SDK ever read one.
+  assert.equal(
+    "id" in one.event,
+    false,
+    "an event carries no id — the server assigns that",
+  );
 
   assert.equal(one.url, "http://x/p");
   assert.equal(one.referrer, null);
   assert.equal(one.userAgent, "node");
-  assert.ok(one.sessionId);
 
-  // Every event gets its own id, which is how a retrying queue
-  // can be de-duplicated downstream.
-  assert.notEqual(factory.track("Signed up").event.id, one.event.id);
+  // No id in this environment because the stub's storage is empty
+  // and the SDK does not fill it in. Asserted as an exact null
+  // rather than "falsy" so that a regression which quietly
+  // restores minting shows up here as a failure, not as a pass.
+  assert.equal(
+    one.sessionId,
+    null,
+    "the SDK reports no id rather than inventing one",
+  );
+
+  // Two calls, two envelopes — but no per-event id. Compared by
+  // name and length rather than by identity, because two events
+  // created in the same millisecond would share a timestamp and
+  // an identity check here would flake.
+  const second = factory.track("Signed up");
+
+  assert.notEqual(second, one, "a distinct object each call");
+  assert.deepEqual(
+    Object.keys(one.event).sort(),
+    ["name", "properties", "timestamp", "type"],
+    "and the payload shape is exactly these four keys",
+  );
 });
 
 test("recording works without a DOM, and says so in the payload", () => {
@@ -575,8 +601,11 @@ test("recording works without a DOM, and says so in the payload", () => {
 
     // Both produce a real event rather than throwing.
     assert.equal(tracked.event.name, "Signed up");
-    assert.match(tracked.event.id, UUID);
-    assert.ok(tracked.sessionId, "a session is not a browser thing");
+    assert.equal(
+      tracked.sessionId,
+      null,
+      "a session is not a browser thing, and this one is the host's",
+    );
 
     // And the envelope is visibly empty rather than absent, so
     // a collector can tell "no browser" from "no data".
@@ -611,22 +640,27 @@ test("page() defaults to the current page and lets callers override", () => {
 });
 
 // ---------------------------------------------------------------
-// Session
+// Session id
 // ---------------------------------------------------------------
 
-test("the session id is stable across reads until reset", () => {
-  Session.reset();
+test("every read reflects what the host last wrote", () => {
+  env.reset();
 
-  const first = Session.current();
+  // Reads are live, not latched. The host owns this value and may
+  // change it at any point in the visit — a correlation id
+  // arriving after a login is the ordinary case, not an edge one.
+  assert.equal(readSessionId(), null);
 
-  assert.equal(Session.current().id, first.id);
+  globalThis.sessionStorage.setItem("analytics.session", "first");
+  assert.equal(readSessionId(), "first");
 
-  Session.reset();
+  globalThis.sessionStorage.setItem("analytics.session", "second");
+  assert.equal(readSessionId(), "second");
 
-  const second = Session.current();
+  globalThis.sessionStorage.removeItem("analytics.session");
+  assert.equal(readSessionId(), null, "and back to null once removed");
 
-  assert.notEqual(second.id, first.id);
-  assert.equal(Session.current().id, second.id);
+  env.reset();
 });
 
 // ---------------------------------------------------------------

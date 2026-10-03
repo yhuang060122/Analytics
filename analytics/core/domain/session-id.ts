@@ -1,131 +1,76 @@
 import { warnOnce } from "../warn";
-import { createId } from "./id";
 
+/**
+ * Where the host puts its correlation id.
+ *
+ * This used to be a private detail — the SDK minted an id and
+ * stored it here without the host ever knowing. Now it is a
+ * contract, so it is worth naming out loud: the host writes
+ *
+ *     sessionStorage.setItem("analytics.session", correlationId)
+ *
+ * and this is the only key the SDK reads.
+ */
 const STORAGE_KEY = "analytics.session";
 
 const STORAGE_WARNING =
-  "sessionStorage is unavailable; falling back to a session " +
-  "that lasts for this page only. Sessions cannot be continued " +
-  "across reloads in this context.";
+  "sessionStorage could not be read, so no session id is " +
+  "available. Events will carry sessionId: null. If the host " +
+  "writes a correlation id, it will be picked up on the next " +
+  "event.";
 
 /**
- * The session storage refused to hold.
+ * The host's correlation id, or null when there is not one.
  *
- * Safari private mode throws on `sessionStorage` access rather
- * than returning nothing, and third-party iframes may be denied
- * it outright. Keeping the generated id here means the page
- * still gets *one* session id instead of a new one per event.
- */
-let memorySession: Session | undefined;
-
-/**
- * Whether talking to sessionStorage is still worth trying.
+ * This used to mint a v4 UUID from a three-branch crypto
+ * fallback chain and keep it for the length of the visit. That
+ * went for the same reason `createId` went: the collector
+ * assigns its own primary key, and nothing in this SDK ever
+ * read a client-minted id — it was serialised into every batch
+ * so the backend could correlate on an identifier the backend
+ * was going to issue anyway.
  *
- * Once it has thrown it will keep throwing, and every event on
- * the page asks — so the answer is remembered rather than
- * rediscovered thousands of times per visit.
+ * What is left is the half that was never the SDK's job. A
+ * correlation id is the backend's to define and the host's to
+ * supply; the SDK has no way to learn it, and inventing a second
+ * one that means the same thing invites the collector to treat
+ * two unrelated identifiers as one key. So the host writes it,
+ * this reads it, and its absence is reported as `null` instead
+ * of being papered over with a guess.
+ *
+ * Never throws. Storage that cannot be read is a missing id, not
+ * a failed event — the payload stays the same shape either way,
+ * which is what lets a collector tell "no id" from "no event".
  */
-let usable = true;
+export function readSessionId(): string | null {
+  // No DOM, no storage (SSR): there is no page to correlate, and
+  // therefore nothing to degrade.
+  if (typeof sessionStorage === "undefined") return null;
 
-function storage(): Storage | undefined {
-  // No DOM, no storage (SSR). That is not a failure worth
-  // warning about: there is no page to degrade.
-  return typeof sessionStorage === "undefined" ? undefined : sessionStorage;
-}
-
-function read(): string | null {
-  const store = storage();
-
-  if (!store || !usable) return null;
+  let stored: string | null;
 
   try {
-    return store.getItem(STORAGE_KEY);
+    stored = sessionStorage.getItem(STORAGE_KEY);
   } catch {
-    usable = false;
+    // Safari in private mode throws on `sessionStorage` access
+    // rather than returning nothing, and a sandboxed third-party
+    // iframe can be denied it outright.
+    //
+    // Deliberately not remembered as "storage is broken": this
+    // used to set a flag so the throw happened once per page
+    // rather than once per event. But the answer can change —
+    // leaving private mode, a frame that stops being sandboxed —
+    // and a cached "it does not work" would go on reporting a
+    // stale verdict for the rest of the visit. `warnOnce` already
+    // keeps this to one line per problem.
     warnOnce("session-storage", STORAGE_WARNING);
 
     return null;
   }
-}
 
-function write(id: string): void {
-  const store = storage();
-
-  if (!store || !usable) return;
-
-  try {
-    store.setItem(STORAGE_KEY, id);
-  } catch {
-    usable = false;
-    warnOnce("session-storage", STORAGE_WARNING);
-  }
-}
-
-function forget(): void {
-  const store = storage();
-
-  if (!store || !usable) return;
-
-  try {
-    store.removeItem(STORAGE_KEY);
-  } catch {
-    usable = false;
-    warnOnce("session-storage", STORAGE_WARNING);
-  }
-}
-
-export class Session {
-  readonly id: string;
-
-  private constructor(id: string) {
-    this.id = id;
-  }
-
-  /**
-   * Get current browser session.
-   * Create one if it doesn't exist.
-   *
-   * Never throws. When storage cannot be read or written the
-   * session lives in memory for as long as the page does.
-   */
-  static current(): Session {
-    const existing = read();
-
-    if (existing) {
-      const cached = memorySession;
-
-      const session =
-        cached && cached.id === existing ? cached : new Session(existing);
-
-      memorySession = session;
-
-      return session;
-    }
-
-    if (memorySession) return memorySession;
-
-    const session = new Session(createId());
-
-    write(session.id);
-
-    memorySession = session;
-
-    return session;
-  }
-
-  /**
-   * Drop the current session, so the next `current()` mints a
-   * new one.
-   *
-   * Exists for the tests, which need each case to start from a
-   * clean session rather than inheriting the previous one's id.
-   * It is deliberately off the public barrel: a host that wants
-   * to end a session is describing something the SDK has no
-   * opinion about — it should say so in its own words.
-   */
-  static reset(): void {
-    memorySession = undefined;
-
-    forget();
-  }
+  // An empty string is what a host writes when the id it had
+  // turned out to be blank. Reporting `""` would be worse than
+  // reporting null: it is a value, so downstream grouping would
+  // treat it as one and merge every such visit together.
+  return stored ? stored : null;
 }

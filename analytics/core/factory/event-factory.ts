@@ -1,6 +1,5 @@
-import { createId } from "../domain/id";
 import { readPageContext } from "../domain/page-context";
-import { Session } from "../domain/session";
+import { readSessionId } from "../domain/session-id";
 import type {
   AnalyticsContext,
   AnalyticsEvent
@@ -11,10 +10,10 @@ import type { DebugController } from "../debug/debug-controller";
 /**
  * Builds the object the queue ships.
  *
- * It is the only consumer of `Session` and `createId`, which is
- * why it is a class rather than two functions on the facade:
- * those two are not part of the public surface precisely
- * because nothing else needs them.
+ * It is the only consumer of `readSessionId()`, which is why that
+ * function is off the public surface: nothing else needs a
+ * correlation id, and a host that wants to end one is describing
+ * something the SDK has no opinion about.
  */
 export class EventFactory {
 
@@ -32,7 +31,6 @@ export class EventFactory {
   ): AnalyticsContext {
 
     const event: AnalyticsEvent = {
-      id: createId(),
       type: "track",
       name,
       properties,
@@ -59,7 +57,6 @@ export class EventFactory {
     const page = readPageContext();
 
     const event: AnalyticsEvent = {
-      id: createId(),
       type: "page",
       name: path ?? page.pagePath,
       properties: {
@@ -99,7 +96,11 @@ export class EventFactory {
     };
 
     const context: AnalyticsContext = {
-      sessionId: Session.current().id,
+      // Read per event, not cached: the host may write its
+      // correlation id at any point — after a login, say — and a
+      // value latched at construction would keep reporting the
+      // absence for the rest of the visit.
+      sessionId: readSessionId(),
       url: page.pageUrl,
       referrer: scope.document?.referrer || null,
       userAgent: scope.navigator?.userAgent ?? "",

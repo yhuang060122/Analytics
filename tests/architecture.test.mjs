@@ -142,6 +142,52 @@ test("the SDK imports no runtime package at all", () => {
 });
 
 
+test("the SDK mints no identifier of its own", () => {
+  // Three things have been deleted from this SDK for the same
+  // reason, and that reason is worth enforcing rather than
+  // re-deriving: an identifier is only worth minting if something
+  // reads it. `createId` and `AnalyticsEvent.id` went when the
+  // retry that would have de-duplicated on one went; the session
+  // id went when it was agreed the backend issues correlation
+  // ids, so a second client-minted one does not join anything.
+  //
+  // Without a rule, the next person reads `timestamp` next to
+  // `sessionId`, assumes an id belongs there, and adds one back
+  // in good faith. The failure is invisible: a client-minted id
+  // is well-formed, unique, and correlates with nothing.
+  const offenders = walk(join(root, "analytics"))
+    .filter((file) => file.endsWith(".ts"))
+    .map((file) => {
+      const code = codeOf(file);
+
+      const mints =
+        // randomUUID, getRandomValues, and the naive shape
+        /\b(randomUUID|getRandomValues)\s*\(/.test(code);
+
+      // Math.random() reaches for entropy for the same reason.
+      const entropy = /\bMath\s*\.\s*random\s*\(/.test(code);
+
+      // And writing to storage is the other half of minting: a
+      // value the SDK persists is a value it decided on.
+      const writes = /sessionStorage\s*\.\s*(setItem|removeItem|clear)\s*\(/.test(
+        code,
+      );
+
+      return {
+        file: file.slice(root.length + 1),
+        mints: mints || entropy || writes,
+      };
+    })
+    .filter((hit) => hit.mints)
+    .map((hit) => hit.file);
+
+  assert.deepEqual(
+    offenders,
+    [],
+    "no module may mint an id or write to sessionStorage: the backend issues correlation ids, and the SDK only reads what the host wrote",
+  );
+});
+
 test("page context is read from one module", () => {
   // The click probe used to spell out pagePath/pageUrl/pageTitle
   // by hand while another probe read them from a helper, so the

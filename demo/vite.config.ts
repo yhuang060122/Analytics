@@ -58,7 +58,14 @@ function analyticsMockApi(): Plugin {
             batch.forEach((context: any) =>
               server.config.logger.info(
                 `  · ${String(context.event.type).padEnd(5)} ` +
-                  `${context.event.name}  [session ${context.sessionId.slice(0, 8)}]`,
+                  `${context.event.name}  [session ${
+                    // Nullable on purpose: the SDK reports what the
+                    // host wrote, and this mock host writes
+                    // nothing. A demo that printed a session id
+                    // here would be printing an SDK-minted one —
+                    // exactly the thing that no longer happens.
+                    context.sessionId ?? "no correlation id"
+                  }]`,
               ),
             );
 

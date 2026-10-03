@@ -14,6 +14,29 @@ import { PageTracker } from "../../analytics/core/probes/page-tracker";
  * Nothing starts here. `probes` says *what* is wired; `start()`
  * below is still what says *when* it runs.
  */
+
+// The correlation id belongs to the host. The SDK only reads it,
+// from `sessionStorage["analytics.session"]`, and reports null
+// when nothing is there — so here is the host half of that
+// contract. In a real app this is wherever the backend's id
+// arrives: a login response, a bootstrap payload, a cookie the
+// app already parsed.
+//
+// Flip this to see the field populated; the mock server's log
+// line prints whichever the case is. Left `false` because the
+// demo has no real session, and writing a fabricated id would
+// make the log look like the SDK still mints one.
+const HOST_WRITES_CORRELATION_ID = false;
+
+if (HOST_WRITES_CORRELATION_ID) {
+  globalThis.sessionStorage.setItem(
+    "analytics.session",
+    `demo-${Date.now().toString(36)}`,
+  );
+} else {
+  globalThis.sessionStorage.removeItem("analytics.session");
+}
+
 const analytics = new Analytics({
   endpoint: "/api/analytics/events",
 

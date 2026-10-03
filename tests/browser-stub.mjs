@@ -85,7 +85,13 @@ export function installBrowser(fetchImpl) {
       for (const key of Object.keys(reg.win)) delete reg.win[key];
       for (const key of Object.keys(reg.doc)) delete reg.doc[key];
       batches.length = 0;
+      // The host owns the correlation id now, so a test that
+      // writes one leaves it behind for every test after it.
+      // Clearing it here is what keeps "no id" the default state
+      // rather than something order-dependent.
+      storage.clear();
     },
+    storage,
     count: (scope, type) => (reg[scope][type] || []).length,
     fire: (scope, type, event = {}) =>
       (reg[scope][type] || []).slice().forEach((h) => h(event)),

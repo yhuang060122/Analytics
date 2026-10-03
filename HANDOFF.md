@@ -2,11 +2,11 @@
 
 > 生成时间：2026-10-02 · 起点 commit `cb05371` "refactor"，其上的简化**尚未提交**
 > 验证基线：`npm --prefix tests run test` → **78/78 绿**；`npm --prefix demo run build` → tsc 0 错；`npm --prefix build run build` → 产物落在 `dist/`
-> 规模：源码 **1940 行 / 26 个 .ts**（起点 41 个），测试 **2671 行 / 6 个 .mjs / 78 个用例**
+> 规模：源码 **1829 行 / 24 个 .ts**（起点 41 个），测试 **6 个 .mjs / 80 个用例**
 > 产物：`dist/analytics.js` 一个（`<script>` 构建已删，见 §6 C 类）
-> 公共 API：**9 项**（起点 15 项，净减 6）
+> 公共 API：**8 项**（起点 15 项，净减 7）
 > 覆盖范围：全部源文件、6 个测试文件、两版 README、评审文档、三个岛的工具链配置
-> **简化进度**：九步简化 + debug 配置合成单个布尔 + 修完全部已知缺陷（75 个测试全绿） —— ① debug 的 DOM inspector 面板整块删除，只留 console；② `stage-colors.ts` 内联、detect 的 Angular 探测删除、**EventQueue 的重试与退避机制整体删除**（用户拍板"连重试机制一起砍"）；③ **Angular adapter 整个目录删除**（252 行）；④ **jQuery adapter 整个目录删除**（165 行）；⑤ **`adapters/network/` 与 `detect.ts` 整个删除**（168 + 53 行），`NetworkTrackerCore` 内联进 `FetchTracker`（次日即随它一起删除，见 ⑥）；⑥ **`adapters/` 整个目录消失** —— 只留 ClickTracker 与 PageTracker 并移进 `core/probes/`，`page-context.ts` 进 `core/domain/`，`FetchTracker` 删除（网络追踪能力整类消失）；⑦ **`<script>` 构建整条产物线删除**（`iife.ts` 103 行），只留一个 ESM 产物；⑧ **debug 层的 event bus 合并进 controller**（`event-bus.ts` 127 + `plugin.ts` 32 行消失），顺带修掉一个泄漏：**匿名 `bus.subscribe()` 的订阅者能活过 `destroy()`**；同时修掉 `cssClass` 在 SVG 上是对象不是字符串；⑨ **debug 的 plugin 注册表整个删除**（只剩 console 一个 sink，`apiKey` 配置项也删掉 —— 认证走 `headers`；次日把 `debug: { enabled, console }` 合成 `debug: boolean`）
+> **简化进度**：十步简化 + debug 配置合成单个布尔 + 修完全部已知缺陷（80 个测试全绿） —— ① debug 的 DOM inspector 面板整块删除，只留 console；② `stage-colors.ts` 内联、detect 的 Angular 探测删除、**EventQueue 的重试与退避机制整体删除**（用户拍板"连重试机制一起砍"）；③ **Angular adapter 整个目录删除**（252 行）；④ **jQuery adapter 整个目录删除**（165 行）；⑤ **`adapters/network/` 与 `detect.ts` 整个删除**（168 + 53 行），`NetworkTrackerCore` 内联进 `FetchTracker`（次日即随它一起删除，见 ⑥）；⑥ **`adapters/` 整个目录消失** —— 只留 ClickTracker 与 PageTracker 并移进 `core/probes/`，`page-context.ts` 进 `core/domain/`，`FetchTracker` 删除（网络追踪能力整类消失）；⑦ **`<script>` 构建整条产物线删除**（`iife.ts` 103 行），只留一个 ESM 产物；⑧ **debug 层的 event bus 合并进 controller**（`event-bus.ts` 127 + `plugin.ts` 32 行消失），顺带修掉一个泄漏：**匿名 `bus.subscribe()` 的订阅者能活过 `destroy()`**；同时修掉 `cssClass` 在 SVG 上是对象不是字符串；⑨ **debug 的 plugin 注册表整个删除**（只剩 console 一个 sink，`apiKey` 配置项也删掉 —— 认证走 `headers`；次日把 `debug: { enabled, console }` 合成 `debug: boolean`；⑩ **`createId` 与 `event.id` 删除**（用户拍板：数据存 SQL Server，主键服务端给），`id.ts` 整个文件消失；⑪ **`Session` 类整个塌缩成 `readSessionId()` 函数**（用户拍板：correlation id 归后端，SDK 只读不生成）—— 详见下表
 
 ---
 
@@ -24,7 +24,7 @@
 core/                  整个 SDK，31 个源文件
   api/                 Analytics 门面 + 契约（EventRecorder / Tracker / BaseTracker）
   probes/              ClickTracker、PageTracker —— 唯一的两个探针
-  domain/              event / context / session / id / page-context
+  domain/              event / context / page-context / session-id（两者都不生成 id）
   factory/             EventFactory：track() / page() → AnalyticsContext
   queue/               EventQueue：批处理、溢出丢最旧（无重试）
   transport/           Destination 端口 + HttpDestination
@@ -251,7 +251,9 @@ bus 里还挂着活人。
 | 项 | 处理 | 结果 |
 |---|---|---|
 | **`Session` 整类退出公共 barrel** | 从 `domain/index.ts` 摘掉 `export * from "./session"` | 公共 API 少一项。`EventFactory` 改为直接 `import { Session } from "../domain/session"` —— **它是唯一的内部消费者，第一版漏了它、tsc 报出来才发现** |
-| **`Session.reset()`** | 保留方法（8 处测试靠它隔离状态），但随类一起不再对外可见，注释写明"它存在是为了测试" | 从"公开 API"降为"内部工具" |
+| **`Session.reset()`** | 保留方法（8 处测试靠它隔离状态），但随类一起不再对外可见，注释写明"它存在是为了测试" | 从"公开 API"降为"内部工具"（**注：随 2026-10-03 的改动一并消失**，`reset()` 的存在理由是清掉自己铸的 id，不铸了就没有可清） |
+| **`Session` 类 → `readSessionId()` 函数**（2026-10-03，用户拍板） | 文件改名 `session.ts` → `session-id.ts`（对齐 `page-context.ts` 的惯例：模块名 = 它读的东西）。**不再生成 id、不再写 sessionStorage、不再有内存兜底** —— 只读宿主写入的 `analytics.session`，读不到返回 `null` | 类仅剩的字段 `memorySession` 存在的唯一理由是"记住自己铸的那个 id"，不铸了就没有状态可记，类因此塌缩成函数。**`AnalyticsContext.sessionId` 类型变 `string \| null`（键保留，值可空）**。**明确放弃了 SDK 自带的会话分组能力**，已写进两版 README 的"刻意不提供"节 —— 否则下一个人会当成 bug 加回来 |
+| **顺手删掉 `usable` 标志** | 存储读失败时不再记忆"存储坏了" | 那个标志原本只为省掉每事件一次的重复抛错，而 `warnOnce` 已经解决了日志刷屏。**记住一个会过期的答案比重复问一次更糟** —— 用户退出无痕模式、frame 不再被沙箱化之后，SDK 仍会坚持说存储不可用 |
 | **`clear()` 整条链** | 删掉 `Analytics.clear()` 与它转发的 `EventQueue.clear()` | 两层都是死代码，删了没人知道 |
 | **`PageContext` 接口** | 删掉接口，`readPageContext()` 的返回类型改成内联对象字面量 | 零处按它标注，导出它只是多一个名字。键仍由 `page context is read from one module` 断言钉住 |
 | **`maxQueueSize`** | 从 `AnalyticsConfig` 与 `EventQueueOptions` 移除，值内联为 `MAX_BUFFERED_EVENTS = 500` 常量 | 行为完全不变（没有任何宿主设过它），只是不再可调 |
@@ -330,8 +332,7 @@ analytics/                                    2118 行 / 30 文件
       debug-event.ts          44  PipelineStage / DebugFailureReason
       index.ts                19  具名导出（不再 export *）
     domain/
-      session.ts             124  sessionStorage 全 try/catch，降级到内存会话
-      id.ts                  103  createId：randomUUID → getRandomValues → Math.random
+      session-id.ts           78  readSessionId() —— 只读宿主写的 correlation id，读不到 null；不生成不写
       event-factory 归 factory/  77  （这里也读 window，故 SSR 下只能 record 不能直接调）
       page-context.ts         36  readPageContext() —— 三键唯一来源
     probes/

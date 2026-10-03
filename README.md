@@ -87,10 +87,10 @@ analytics/
                             EventRecorder / Tracker / BaseTracker
                             (tracker.ts)
     probes/                 ClickTracker, PageTracker
-    domain/                 event / context / session / id
-                            (id.ts holds the crypto → getRandomValues
-                            → Math.random fallback; page-context.ts is
-                            the one place the page triple comes from)
+    domain/                 event / context / page-context / session-id
+                            (page-context.ts is the one place the page
+                            triple comes from; session-id.ts reads the
+                            host's correlation id and mints nothing)
     factory/                EventFactory: track() / page() → AnalyticsContext
     queue/                  EventQueue: batching + overflow drop (no retry)
     transport/              Destination port + HttpDestination (HTTP POST,
@@ -244,6 +244,66 @@ data — a "Hi Sarah" greeting, a message preview, a price with the
 customer's name beside it. The key is always present (`null` when
 not opted in) so the property schema does not depend on which
 element was clicked.
+
+---
+
+## What one event looks like
+
+```json
+{
+  "sessionId": "01JB2K9F3Q",
+  "url": "https://example.com/portfolio",
+  "referrer": null,
+  "userAgent": "Mozilla/5.0 …",
+  "event": {
+    "type": "track",
+    "name": "Signup",
+    "properties": { "plan": "pro" },
+    "timestamp": "2026-10-03T09:12:44.120Z"
+  }
+}
+```
+
+**There is no event `id`.** One used to be generated per event, on
+the reasoning that a queue which retries needs a key for the server
+to de-duplicate on. The retry went away, and with it went the only
+part of this SDK that would ever have read an id — so it was
+serialised into every batch only for the collector to attach a
+primary key it was going to assign anyway.
+
+## The correlation id is yours
+
+`sessionId` is not minted here either. The SDK reads it from
+`sessionStorage` and reports `null` when it is not there:
+
+```ts
+sessionStorage.setItem("analytics.session", correlationId);
+```
+
+That key is the whole contract. Write it whenever the id arrives —
+a login response, a bootstrap payload, a cookie the app already
+parsed — and every event after that carries it. **The SDK reads it
+per event rather than latching it at construction**, so an id that
+appears mid-visit applies from that event onwards, not after a
+reload.
+
+`null` is a real value, not a gap: the key is always present, so a
+collector can tell "the host sent no id" from "this SDK version has
+no such field". An empty string reads as `null` too — it is a
+value, so reporting it would merge every id-less visit into one
+group downstream.
+
+Worth being explicit about what this gives up: **the SDK no longer
+provides session grouping of its own.** If nothing writes the key,
+every event arrives with `sessionId: null` and correlating visits
+becomes the backend's job. That is the right trade when the backend
+issues correlation ids anyway — a second, client-minted identifier
+with the same meaning but a different shape is something downstream
+has to be taught not to trust.
+
+If storage cannot be read at all (Safari private mode, a sandboxed
+third-party iframe), the SDK warns once and reports `null`. It does
+not remember that storage failed, because the answer can change.
 
 ---
 
@@ -458,7 +518,7 @@ npm --prefix tests run test
   never settles,
   `keepalive` gating, SSR construction, a concurrent `flush()`
   sharing one request, `close()` draining the buffer, plus unit
-  tests for ids / factory / session / destination
+  tests for factory / session id / destination
 
 ### Invariants worth knowing
 
@@ -479,6 +539,9 @@ fails the suite rather than being discovered later:
   or listen at import time
 - the SDK imports **no package at all** — only its own relative
   modules
+- the SDK mints **no identifier**: no `randomUUID`, no
+  `Math.random`, and no writes to `sessionStorage`. The backend
+  issues correlation ids
 - every listener the SDK registers can be removed again
 - the root has no `package.json`, and `tests/` declares no
   dependencies
@@ -510,3 +573,16 @@ fails the suite rather than being discovered later:
 
   `page()` takes the path, so a router that knows more than the
   URL can say so — `analytics.page("/orders/42")`.
+
+- **No client-minted identifiers.** There is no event `id`, and
+  the `sessionId` is read rather than generated. The backend
+  issues correlation ids; a second identifier with the same
+  meaning and a different shape is something downstream has to
+  be taught not to trust. The practical consequence is the one
+  worth stating plainly: **write nothing to
+  `sessionStorage["analytics.session"]` and the SDK gives you no
+  session grouping at all** — every event arrives with
+  `sessionId: null` and joining visits up becomes the backend's
+  job. That is the right trade when the backend already has the
+  id, and the wrong one when it does not, so it is a decision
+  rather than a limitation.

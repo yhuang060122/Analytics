@@ -83,10 +83,10 @@ analytics/
                             EventRecorder / Tracker / BaseTracker
                             (tracker.ts)
     probes/                 ClickTracker、PageTracker
-    domain/                 event / context / session / id
-                            （id.ts 里是 crypto → getRandomValues →
-                            Math.random 的降级链；page-context.ts 是
-                            那三个页面键的唯一来源）
+    domain/                 event / context / page-context / session-id
+                            （page-context.ts 是那三个页面键的唯一来源；
+                            session-id.ts 只读宿主的 correlation id，
+                            自己什么都不生成）
     factory/                EventFactory：track() / page() → AnalyticsContext
     queue/                  EventQueue：批处理、溢出丢弃（无重试）
     transport/              Destination 端口 + HttpDestination（HTTP POST，
@@ -218,6 +218,55 @@ analytics/index.ts    全部
 `textContent`。这是刻意的：元素文字是最容易带个人数据的属性 —— 一句
 "Hi Sarah" 的问候、一段消息预览、一个旁边带着客户姓名的价格。键始终存在
 （未声明时为 `null`），这样属性 schema 不依赖被点击的是哪个元素。
+
+---
+
+## 一个事件长什么样
+
+```json
+{
+  "sessionId": "01JB2K9F3Q",
+  "url": "https://example.com/portfolio",
+  "referrer": null,
+  "userAgent": "Mozilla/5.0 …",
+  "event": {
+    "type": "track",
+    "name": "Signup",
+    "properties": { "plan": "pro" },
+    "timestamp": "2026-10-03T09:12:44.120Z"
+  }
+}
+```
+
+**事件里没有 `id`。** 原本每个事件都生成一个，理由是"会重试的队列需要一个键
+让服务端去重"。重试已经删掉了，随它一起消失的是这个 SDK 里唯一会读 id 的地方
+—— 于是它被序列化进每个批次，只是为了让 collector 去挂一个它本来就要分配的
+主键。
+
+## correlation id 归你所有
+
+`sessionId` 也不是这里生成的。SDK 只从 `sessionStorage` 里读，读不到就是 `null`：
+
+```ts
+sessionStorage.setItem("analytics.session", correlationId);
+```
+
+这个 key 就是全部契约。id 什么时候到就什么时候写 —— 登录响应、启动时的
+payload、应用自己已经解析出来的 cookie 都行 —— 之后每个事件都会带上它。
+**SDK 是每个事件读一次，而不是在构造时锁定**，所以访问中途出现的 id 从那个
+事件起就生效，不需要等刷新。
+
+`null` 是一个真实的值，不是一个缺口：键永远在，所以 collector 能分清"宿主没发
+id"和"这个 SDK 版本没有这个字段"。空串也会读成 `null` —— 空串是个值，报出去
+反而会让下游把所有没有 id 的访问合并成一组。
+
+值得明说的是这里**放弃了什么**：**SDK 不再自带会话分组能力**。如果没人写这个
+key，每个事件的 `sessionId` 都是 `null`，把访问关联起来就变成后端的事。当后端
+本来就发 correlation id 时这是一笔合适的交换 —— 多造一个含义相同、形状不同的
+客户端 id，只会让下游多一件需要学会不要轻信的事。
+
+如果存储完全读不到（Safari 无痕模式、被沙箱化的第三方 iframe），SDK 会警告一次
+然后报 `null`。它**不记住**"存储坏了"，因为这个答案会变。
 
 ---
 
@@ -386,8 +435,8 @@ npm --prefix tests run test
 - `architecture.test.mjs` —— 下面那些不变量
 - `robustness.test.mjs` —— 没有 `crypto.randomUUID`、storage 被禁用或缺失、
   `destroy()` 停掉 debug 上报、永不 settle 的请求、`keepalive` 门禁、SSR 构造、并发
-  `flush()` 共用一个请求、`close()` 排空缓冲区，外加 ids / factory /
-  session / destination 的单元测试
+  `flush()` 共用一个请求、`close()` 排空缓冲区，外加 factory /
+  session id / destination 的单元测试
 
 ### 值得知道的不变量
 
@@ -405,6 +454,8 @@ npm --prefix tests run test
   `domain/page-context.ts` 读，别处不许拼
 - import 这个库不会启动任何东西 —— 任何模块都不得在 import 时构造或挂监听
 - SDK **不 import 任何包** —— 只有自己的相对模块
+- SDK **不生成任何标识**：没有 `randomUUID`、没有 `Math.random`、
+  不写 `sessionStorage`。correlation id 由后端发
 - SDK 注册的每个监听器都能被移除
 - 根目录没有 `package.json`，`tests/` 不声明任何依赖
 
@@ -432,3 +483,11 @@ npm --prefix tests run test
 
   `page()` 接受路径，所以比 URL 知道更多的路由可以多说一点：
   `analytics.page("/orders/42")`。
+
+- **不生成任何客户端标识。** 事件没有 `id`，`sessionId` 是读来的而不是
+  生成的。correlation id 由后端发；多造一个含义相同、形状不同的标识，
+  只会让下游多一件需要学会不要轻信的事。实际后果值得直说：
+  **如果什么都不往 `sessionStorage["analytics.session"]` 里写，
+  SDK 就完全不提供会话分组** —— 每个事件的 `sessionId` 都是 `null`，
+  把访问关联起来变成后端的事。当后端本来就握着这个 id 时这是一笔合适的
+  交换，拿不到时就是错的 —— 所以这是一个决定，不是一个限制。
