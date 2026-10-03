@@ -1,12 +1,12 @@
 # Analytics — 项目 Handoff
 
 > 生成时间：2026-10-02 · 起点 commit `cb05371` "refactor"，其上的简化**尚未提交**
-> 验证基线：`npm --prefix tests run test` → **85/85 绿**；`npm --prefix demo run build` → tsc 0 错；`npm --prefix build run build` → 产物落在 `dist/`
-> 规模：源码 **2051 行 / 27 个 .ts**（起点 41 个），测试 **2708 行 / 6 个 .mjs / 85 个用例**
+> 验证基线：`npm --prefix tests run test` → **78/78 绿**；`npm --prefix demo run build` → tsc 0 错；`npm --prefix build run build` → 产物落在 `dist/`
+> 规模：源码 **1940 行 / 26 个 .ts**（起点 41 个），测试 **2671 行 / 6 个 .mjs / 78 个用例**
 > 产物：`dist/analytics.js` 一个（`<script>` 构建已删，见 §6 C 类）
-> 公共 API：**10 项**（起点 15 项，净减 5）
+> 公共 API：**9 项**（起点 15 项，净减 6）
 > 覆盖范围：全部源文件、6 个测试文件、两版 README、评审文档、三个岛的工具链配置
-> **简化进度**：八步简化 + 修完全部已知缺陷（79 个测试全绿） —— ① debug 的 DOM inspector 面板整块删除，只留 console；② `stage-colors.ts` 内联、detect 的 Angular 探测删除、**EventQueue 的重试与退避机制整体删除**（用户拍板"连重试机制一起砍"）；③ **Angular adapter 整个目录删除**（252 行）；④ **jQuery adapter 整个目录删除**（165 行）；⑤ **`adapters/network/` 与 `detect.ts` 整个删除**（168 + 53 行），`NetworkTrackerCore` 内联进 `FetchTracker`（次日即随它一起删除，见 ⑥）；⑥ **`adapters/` 整个目录消失** —— 只留 ClickTracker 与 PageTracker 并移进 `core/probes/`，`page-context.ts` 进 `core/domain/`，`FetchTracker` 删除（网络追踪能力整类消失）；⑦ **`<script>` 构建整条产物线删除**（`iife.ts` 103 行），只留一个 ESM 产物；⑧ **debug 层的 event bus 合并进 controller**（`event-bus.ts` 127 + `plugin.ts` 32 行消失），顺带修掉一个泄漏：**匿名 `bus.subscribe()` 的订阅者能活过 `destroy()`**；同时修掉 `cssClass` 在 SVG 上是对象不是字符串
+> **简化进度**：九步简化 + debug 配置合成单个布尔 + 修完全部已知缺陷（75 个测试全绿） —— ① debug 的 DOM inspector 面板整块删除，只留 console；② `stage-colors.ts` 内联、detect 的 Angular 探测删除、**EventQueue 的重试与退避机制整体删除**（用户拍板"连重试机制一起砍"）；③ **Angular adapter 整个目录删除**（252 行）；④ **jQuery adapter 整个目录删除**（165 行）；⑤ **`adapters/network/` 与 `detect.ts` 整个删除**（168 + 53 行），`NetworkTrackerCore` 内联进 `FetchTracker`（次日即随它一起删除，见 ⑥）；⑥ **`adapters/` 整个目录消失** —— 只留 ClickTracker 与 PageTracker 并移进 `core/probes/`，`page-context.ts` 进 `core/domain/`，`FetchTracker` 删除（网络追踪能力整类消失）；⑦ **`<script>` 构建整条产物线删除**（`iife.ts` 103 行），只留一个 ESM 产物；⑧ **debug 层的 event bus 合并进 controller**（`event-bus.ts` 127 + `plugin.ts` 32 行消失），顺带修掉一个泄漏：**匿名 `bus.subscribe()` 的订阅者能活过 `destroy()`**；同时修掉 `cssClass` 在 SVG 上是对象不是字符串；⑨ **debug 的 plugin 注册表整个删除**（只剩 console 一个 sink，`apiKey` 配置项也删掉 —— 认证走 `headers`；次日把 `debug: { enabled, console }` 合成 `debug: boolean`）
 
 ---
 
@@ -28,7 +28,7 @@ core/                  整个 SDK，31 个源文件
   factory/             EventFactory：track() / page() → AnalyticsContext
   queue/               EventQueue：批处理、溢出丢最旧（无重试）
   transport/           Destination 端口 + HttpDestination
-  debug/               横切观察者：bus + plugin 端口 + console 唯一内置
+  debug/               横切观察者：console sink + stage/reason 词汇表（200 行）
   dom.ts / warn.ts     hasDom() 守卫 / warnOnce() 降级必须出声
 index.ts               公开 barrel（导出全部）
 ```
@@ -182,6 +182,33 @@ bus 里还挂着活人。
 顺带把 `tracker-port.test.mjs` 里两个已有假元素从"有 `className` 无 `getAttribute`"
 改成真实的 `getAttribute` 形状 —— 原来的桩比浏览器宽容，正是 §5 第 1 条那条铁律。
 
+### P1 — `page()` 的默认参数在服务端静默丢事件 —— **已修（2026-10-03）**
+
+`page(path: string = window.location.pathname)` —— **默认参数在调用点求值**，
+所以 `analytics.page()` 在服务端渲染里摸 `window` 并抛错。
+
+后果不是崩溃，是**静默丢数据**：`Analytics.record()` 的 try/catch 兜住了，
+发一条 `warnOnce("record-failed")` —— 而 `warnOnce` 是**进程级**的，
+所以**第一次之后的每次渲染都同样失败、无声无息**。
+
+修法：`readPageContext()`（本来就 SSR 安全，返回空串）+ `??`。
+**不需要 `hasDom()` 守卫** —— 我第一版加了，是多余的。
+现在无 DOM 时产出 `url: ""` / `userAgent: ""` 的事件：
+**看得见地不完整，而不是缺失。**
+
+新用例 `recording works without a DOM` 双向验证过
+（把 `?? page.pagePath` 改回 `?? window.location.pathname` → 精确复现原 bug）。
+
+**顺带修掉一个真问题**：架构断言 `page context is read from one module`
+报出 `PageTracker.trackDuration()` —— 它自己在拼 `pagePath` / `pageTitle`，
+而 click 探针走 `readPageContext()`。同一批页面键来自两个读取点。
+改成 `...readPageContext()`，这正是 HANDOFF §6 B 类里记着的那条不一致。
+
+**那条断言本身也修了**：它原来查"三个键名是否同时出现"，于是**合法调用
+`readPageContext()` 并使用返回值**的 factory 也被标成 offender。改成查
+"自己定义了三键"（对象字面量 / interface 里的键）而不是"引用过这三个名字"。
+**判据必须是"它做了那个动作"，不是"它提到了那个名字"。**
+
 ### 已在去 inspector 那轮顺手修掉
 
 - ~~`tests/tsconfig.build.json` 引用已删的 `auto-track.ts` / `adapters/index.ts`~~ —— 已删。
@@ -251,7 +278,7 @@ bus 里还挂着活人。
 | 项 | 说明 |
 |---|---|
 | ~~**`iife.ts`（103 行，占 5%）**~~ | **已删（2026-10-02）** —— 它零行为测试覆盖，却要带一整条产物线、一个要挡在 barrel 外的额外入口、一个全局名、一条没法关掉的自安装路径。`tsup.config.ts` 从数组配置简化成单对象，`dist/` 只剩一个产物。配套的架构断言换成了 `the library entry starts nothing on import`（守住"import 不得启动任何东西"这个它本来就在守的承诺） |
-| ~~**debug 子系统 432 行 / 20%**~~ | **第 8 步已瘦身到 372 行 / 4 个文件**，但没砍功能 —— 砍的是**重复的簿记**：`DebugEventBus` 与 `DebugController` 各存一份订阅者（Map + Set/WeakMap），靠 `onDrop` 回调保持同步。合并后注册表是唯一入口，**顺带修掉一个泄漏**（见 §4）。三次失败退订、`stop()` 拆卸、console 内置全部保留 |
+| ~~**debug 子系统 432 行 / 20%**~~ | **第 9 步砍到 200 行 / 3 个文件**。第 8 步先合并了重复的簿记，第 9 步发现注册表本身也没有存在理由 —— 只有一个 sink（console），而 `registerDebugPlugin` 的全部复杂度（名字、`stop()` 拆卸钩子、Map、底下的 bus）都是为"让第二个 sink 进来"准备的。`console-plugin.ts` 内联进 controller，三次失败退订机制一起消失（没有第二个插件需要隔离） |
 | **`Destination` 端口抽象（37 行）** | `EventQueue` 只依赖它，`HttpDestination` 是唯一实现，且这层抽象是"传输可替换"这个已经不存在的能力留下的。删掉的话 `EventQueue` 直接依赖 `HttpDestination` —— 但那样 `queue.test.mjs` 就得 stub 一个具体类而不是接口，测试会变脆。**我倾向留着**，抽象本身很轻 |
 | **`EnterPoint` 测试文件归类** | `robustness.test.mjs`（21 用例 / 727 行）已经成了杂物袋：session、id、queue、debug、transport 的单元测试都在里面。拆分（`domain.test.mjs` / `transport.test.mjs`）能提高可读性，但不减代码量 |
 
@@ -273,7 +300,7 @@ bus 里还挂着活人。
 |---|---|
 | **`Destination` 端口抽象（37 行）** | 倾向留着。抽象很轻，删了反而让 `queue.test.mjs` 得 stub 一个具体类而不是接口，测试会变脆 |
 | **`robustness.test.mjs` 拆分** | 21+ 用例的杂物袋（session / id / queue / debug / transport 都在里面）。拆成 `domain.test.mjs` / `transport.test.mjs` 提高可读性，但**不减代码量**，纯整理 |
-| **debug 子系统（372 行 / 19%）** | 已从 432 瘦到 372，且没砍功能。要再往下砍就得先回答"这个 SDK 需不需要一个可观察性出口"—— 你目前的用法是 `debug.console`，而插件 API 只有 demo 在用。**这不是代码量问题，是产品定位问题**，别当成瘦身任务做 |
+| ~~**debug 子系统**~~ | **第 9 步已砍到 200 行**，注册表整个删除。如果将来真的需要第二个 sink（接 collector、算指标），那是一个明确的新增 —— 记得带回一个 `destroy()` 能走完的注册表，别用匿名 `subscribe` |
 | **`iife.ts` 已删** | 少一条产物线。如果将来 `<script>` 引入是真需求，那是一个明确的新增，而不是"把删掉的加回来" |
 
 **如果一定要找下一件事**：把 `robustness.test.mjs` 拆开。理由不是"更干净"，
@@ -290,19 +317,18 @@ bus 里还挂着活人。
 analytics/                                    2118 行 / 30 文件
   index.ts                    14  公共 barrel（导出全部）
   core/
-    queue/event-queue.ts     270  批处理、定时 flush、溢出丢最旧、online 重发
+    queue/event-queue.ts     271  批处理、定时 flush、溢出丢最旧、online 重发
                                          peek-then-splice：发送成功才出队
-    api/analytics.ts         310  门面：registerTracker/start/destroy/close/track/page/flush
+    api/analytics.ts         300  门面：registerTracker/start/destroy/close/track/page/flush
                                          + wireProbes（消费 config.probes）
-    api/tracker.ts            115  EventRecorder + Tracker + ProbeFactory + BaseTracker
+    api/tracker.ts            106  EventRecorder + Tracker + ProbeFactory + BaseTracker
     transport/
-      http-destination.ts    225  POST + 超时 + keepalive 字节闸门
+      http-destination.ts    226  POST + 超时 + keepalive 字节闸门
     debug/
-      debug-controller.ts    253  注册表 + 故障隔离 + console 内置
-                                         （原 event-bus.ts 与 plugin.ts 已并入）
-      console-plugin.ts       58  唯一内置（颜色表已内联其中）
+      debug-controller.ts    136  console sink + 一个测试专用 observe 缝
+                                         （observe 替换 sink，不叠加）
       debug-event.ts          44  PipelineStage / DebugFailureReason
-      index.ts                17  具名导出（不再 export *）
+      index.ts                19  具名导出（不再 export *）
     domain/
       session.ts             124  sessionStorage 全 try/catch，降级到内存会话
       id.ts                  103  createId：randomUUID → getRandomValues → Math.random

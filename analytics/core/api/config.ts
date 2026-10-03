@@ -1,12 +1,6 @@
-import type { DebugOptions } from "../debug/debug-controller";
 import type { ProbeFactory } from "./tracker";
 
-/**
- * Re-exported so the root barrel still carries it. The
- * definition lives next to the class that consumes it — it
- * used to be duplicated here.
- */
-export type { DebugOptions, ProbeFactory };
+export type { ProbeFactory };
 
 export interface AnalyticsConfig {
   endpoint: string;
@@ -22,11 +16,24 @@ export interface AnalyticsConfig {
    */
   timeoutMs?: number;
 
-  apiKey?: string;
-
+  /**
+   * Extra headers on every request. This is how auth travels:
+   * there is no `apiKey` shorthand, because a shorthand picks
+   * one header name and one auth scheme on the host's behalf,
+   * and the header a collector wants is not always the header
+   * it asked for. `Authorization`, `X-API-Key` and a signed
+   * header are all one line here.
+   */
   headers?: Record<string, string>;
 
-  debug?: DebugOptions;
+  /**
+   * Report the pipeline to the console.
+   *
+   * A boolean, not an options object: the console is the only
+   * sink, so there was nothing a second field could decide.
+   * Off by default — a shipped page should not narrate itself.
+   */
+  debug?: boolean;
 
   /**
    * Probes to wire up, in order. Each factory receives the

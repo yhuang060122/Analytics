@@ -95,3 +95,40 @@ export function installBrowser(fetchImpl) {
 
 export const sleep = (ms) =>
   new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Read what the pipeline reported, without a plugin registry.
+ *
+ * `DebugController.observe` is the SDK's only test seam — the
+ * stage and reason of a debug event exist nowhere else, since
+ * the console is the single sink and its output is formatted
+ * for a human. So the suite assigns a function to it.
+ *
+ * Returns the array it fills, plus the usual pair of shortcuts:
+ * `stages` is `"<stage>:<event name>"` strings (what most
+ * assertions want) and `reasons` is every failure reason seen,
+ * in order.
+ */
+export function observeDebug(debug) {
+  const events = [];
+  const reasons = [];
+
+  debug.observe = (event) => {
+    events.push(event);
+
+    if (event.reason) reasons.push(event.reason);
+  };
+
+  // Getters, not snapshots: assigning `events.stages` once would
+  // freeze the list at that moment, and every assertion here
+  // runs after more events have arrived.
+  Object.defineProperties(events, {
+    stages: {
+      get: () =>
+        events.map((event) => `${event.stage}:${event.context.event.name}`),
+    },
+    reasons: { get: () => [...reasons] },
+  });
+
+  return events;
+}

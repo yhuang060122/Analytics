@@ -1,4 +1,5 @@
 import { createId } from "../domain/id";
+import { readPageContext } from "../domain/page-context";
 import { Session } from "../domain/session";
 import type {
   AnalyticsContext,
@@ -7,6 +8,14 @@ import type {
 
 import type { DebugController } from "../debug/debug-controller";
 
+/**
+ * Builds the object the queue ships.
+ *
+ * It is the only consumer of `Session` and `createId`, which is
+ * why it is a class rather than two functions on the facade:
+ * those two are not part of the public surface precisely
+ * because nothing else needs them.
+ */
 export class EventFactory {
 
   private readonly debug: DebugController;
@@ -34,16 +43,27 @@ export class EventFactory {
   }
 
   page(
-    path: string = window.location.pathname,
+    path?: string,
     properties: Record<string, unknown> = {}
   ): AnalyticsContext {
+
+    // Read the page once, and only if there is one. This used
+    // to be a default parameter — `path: string = window
+    // .location.pathname` — which looked tidy and hid the real
+    // shape: a default is evaluated at the call site, so
+    // `analytics.page()` reached for `window` from inside the
+    // facade's `record()`, three layers away from the only thing
+    // that knew a browser was required. A server render got an
+    // event dropped with one `warnOnce`, and since that fires
+    // once per process, every render after it failed silently.
+    const page = readPageContext();
 
     const event: AnalyticsEvent = {
       id: createId(),
       type: "page",
-      name: path,
+      name: path ?? page.pagePath,
       properties: {
-        title: document.title,
+        title: page.pageTitle,
         ...properties,
       },
       timestamp: new Date().toISOString(),
@@ -52,15 +72,37 @@ export class EventFactory {
     return this.createContext(event);
   }
 
+  /**
+   * The per-event envelope: who, where, and what the browser
+   * says about itself.
+   *
+   * Every field degrades rather than throws. Recording on a
+   * server produces an event with no `url` and no `userAgent`,
+   * which is visibly incomplete downstream — and a dropped event
+   * with a one-shot warning is not, because the second server
+   * render fails the same way silently.
+   */
   private createContext(
     event: AnalyticsEvent
   ): AnalyticsContext {
 
+    // One read, and the only one. `readPageContext()` is already
+    // SSR-safe — it returns empty strings rather than throwing —
+    // so there is no guard here, and no `hasDom()` either. The
+    // two values that are not part of that triple are read here
+    // because nothing else reads them.
+    const page = readPageContext();
+
+    const scope = globalThis as {
+      document?: Document;
+      navigator?: { userAgent?: string };
+    };
+
     const context: AnalyticsContext = {
       sessionId: Session.current().id,
-      url: window.location.href,
-      referrer: document.referrer || null,
-      userAgent: navigator.userAgent,
+      url: page.pageUrl,
+      referrer: scope.document?.referrer || null,
+      userAgent: scope.navigator?.userAgent ?? "",
       event,
     };
 
@@ -72,6 +114,7 @@ export class EventFactory {
     });
 
     return context;
+
   }
 
 }

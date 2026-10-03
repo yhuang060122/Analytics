@@ -1,17 +1,19 @@
 /**
  * Public surface of the debug layer.
  *
- * `DebugEvent` and `DebugPlugin` are what a plugin author types
- * `onEvent` against; `CONSOLE_PLUGIN` is the registry key of the
- * built-in, so a host can remove it without spelling the name by
- * hand. `DebugController` itself is not re-exported here — the
- * root barrel already exposes it as `analytics.debug`, and two
- * paths to the same object is one too many.
+ * There is one sink — the console — and it is not a plugin any
+ * more, so there is nothing here to register. What remains is
+ * the vocabulary: the stage names a host would match on and the
+ * reasons a failure can have, both useful when reading console
+ * output or reasoning about what the pipeline reported.
  *
- * `DebugOptions` is intentionally absent for the same reason: it
- * is re-exported from `core/api/config`, and exporting the same
- * name twice would make the barrel ambiguous.
+ * `DebugController` is not re-exported: the root barrel already
+ * exposes it as `analytics.debug`, and two paths to one object
+ * is one too many. There is no options type either — the config
+ * is one boolean, so there was nothing for a type to describe.
  */
-export type { DebugEvent, DebugFailureReason, PipelineStage } from "./debug-event";
-export type { DebugPlugin } from "./debug-controller";
-export { CONSOLE_PLUGIN } from "./console-plugin";
+export type {
+  DebugEvent,
+  DebugFailureReason,
+  PipelineStage,
+} from "./debug-event";

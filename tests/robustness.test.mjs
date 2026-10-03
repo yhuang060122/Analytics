@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { installBrowser, sleep } from "./browser-stub.mjs";
+import { installBrowser, observeDebug, sleep } from "./browser-stub.mjs";
 
 const env = installBrowser();
 const require = env.require;
@@ -251,144 +251,40 @@ test("the session falls back to memory instead of throwing", () => {
   }
 });
 
-// ---------------------------------------------------------------
-// debug plugins must not be able to break the host app
-// ---------------------------------------------------------------
+test("destroy() stops debug reporting, so nothing outlives the instance", async () => {
+  // This is the assertion that used to read "destroy() must leave
+  // no plugin attached", back when there was a registry to walk.
+  // The leak it guarded was real: `teardown()` only walked the
+  // named plugins, so an anonymous `bus.subscribe(fn)` outlived
+  // the SDK it was watching. There is no registry now, and
+  // `stop()` clears the one thing that could still be holding on.
+  const analytics = offlineAnalytics({ debug: true });
 
-test("a throwing debug plugin does not reach track()", () => {
-  const analytics = offlineAnalytics({ debug: { enabled: true } });
-
-  const healthy = [];
-
-  analytics.debug.registerDebugPlugin({
-    name: "boom",
-    onEvent() {
-      throw new Error("plugin blew up");
-    },
-  });
-
-  analytics.debug.registerDebugPlugin({
-    name: "healthy",
-    onEvent: event => healthy.push(event.stage),
-  });
-
-  assert.doesNotThrow(() => analytics.track("Signed up"));
-  assert.equal(analytics.pending, 1);
-
-  assert.ok(
-    healthy.includes("created"),
-    "one broken observer must not silence the others",
-  );
-
-  analytics.destroy();
-});
-
-test("a plugin that fails every time is eventually retired", () => {
-  const analytics = offlineAnalytics({ debug: { enabled: true } });
-
-  const healthy = [];
-
-  analytics.debug.registerDebugPlugin({
-    name: "healthy",
-    onEvent: event => healthy.push(event.stage),
-  });
-
-  analytics.debug.registerDebugPlugin({
-    name: "terminal",
-    onEvent() {
-      throw new Error("always");
-    },
-  });
-
-  for (let i = 0; i < 6; i += 1) analytics.track("Signed up");
-
-  assert.ok(
-    !analytics.debug.debugPlugins.includes("terminal"),
-    "a listener that fails every time is unsubscribed",
-  );
-
-  assert.ok(
-    analytics.debug.debugPlugins.includes("healthy"),
-    "an innocent plugin is never collateral damage",
-  );
-
-  analytics.destroy();
-});
-
-test("one failure does not retire a plugin", () => {
-  const debug = new DebugController({ enabled: true });
-
-  let calls = 0;
-
-  debug.registerDebugPlugin({
-    name: "warming-up",
-    onEvent() {
-      calls += 1;
-      if (calls === 1) throw new Error("transient");
-    },
-  });
-
-  const event = { stage: "created" };
-
-  assert.doesNotThrow(() => {
-    debug.emit(event);
-    debug.emit(event);
-  });
-
-  assert.equal(calls, 2, "the plugin is still subscribed");
-
-  // And a success resets the count, so a plugin that fails
-  // early and then behaves is never retired by the accumulation.
-  assert.deepEqual(debug.debugPlugins, ["warming-up"]);
-});
-
-test("a plugin that throws on unregister does not stay listed", () => {
-  const debug = new DebugController({ enabled: true });
-
-  debug.registerDebugPlugin({
-    name: "bad-teardown",
-    onEvent() {},
-    stop() {
-      throw new Error("teardown blew up");
-    },
-  });
-
-  // The entry is removed before stop() runs, so a throwing
-  // teardown cannot leave a detached plugin still advertised.
-  assert.doesNotThrow(() => debug.unregisterDebugPlugin("bad-teardown"));
-  assert.deepEqual(debug.debugPlugins, []);
-});
-
-test("every plugin is detached by destroy(), with no anonymous escape hatch", async () => {
-  // The bus this replaced accepted anonymous subscribers, and
-  // `teardown()` only walked the named registry — so a bare
-  // `bus.subscribe(fn)` outlived the SDK it was observing. There
-  // is no anonymous subscription any more, which makes the
-  // registry the only way in and therefore exhaustive.
-  const analytics = offlineAnalytics({ debug: { enabled: true } });
-
-  const seen = [];
-
-  analytics.debug.registerDebugPlugin({
-    name: "watcher",
-    onEvent: (event) => seen.push(event.stage),
-  });
+  const seen = observeDebug(analytics.debug);
 
   analytics.track("Signed up");
-  assert.ok(seen.length > 0, "the plugin saw the event");
+  assert.ok(seen.length > 0, "the observer saw the event");
 
-  // `destroy()` is fire-and-forget: it tears plugins down inside
-  // a `.finally()` on the last flush, so a plugin still sees the
-  // final "sent". `close()` is the awaitable form, and this is
-  // the one place the difference is observable.
+  // `destroy()` is fire-and-forget: it stops debug reporting
+  // inside a `.finally()` on the last flush, so the final "sent"
+  // is still reported. `close()` is the awaitable form, and this
+  // is the one place the difference is observable.
   analytics.destroy();
   await new Promise((resolve) => setTimeout(resolve, 20));
 
-  assert.deepEqual(
-    analytics.debug.debugPlugins,
-    [],
-    "destroy() must leave no plugin attached",
+  const afterDestroy = seen.length;
+
+  assert.equal(
+    analytics.debug.observe,
+    undefined,
+    "destroy() must release the observer it was holding",
   );
+
+  // And nothing can put events back: the engine that emits them
+  // is gone, and the console switch is closed with it.
+  analytics.flush();
+
+  assert.equal(seen.length, afterDestroy);
 });
 
 // ---------------------------------------------------------------
@@ -420,14 +316,9 @@ test("a timeout is reported as a timeout, not a transport error", async () => {
   const restore = hangForever();
 
   try {
-    const debug = new DebugController({ enabled: true });
+    const debug = new DebugController(true);
 
-    const events = [];
-
-    debug.registerDebugPlugin({
-      name: "watcher",
-      onEvent: event => events.push(event),
-    });
+    const events = observeDebug(debug);
 
 
     const destination = new HttpDestination(
@@ -658,6 +549,52 @@ test("track() builds the whole context, not just the event", () => {
   assert.notEqual(factory.track("Signed up").event.id, one.event.id);
 });
 
+test("recording works without a DOM, and says so in the payload", () => {
+  // `page()` used to take `path: string = window.location.pathname`
+  // — a default is evaluated at the call site, so this reached for
+  // `window` from inside the facade's `record()`, and a server
+  // render dropped the event. Worse, the drop was reported by a
+  // process-wide `warnOnce`, so every render after the first
+  // failed the same way silently.
+  // `location` as well as `window` / `document`: the browser stub
+  // assigns `globalThis.location` separately, so swapping only
+  // `window` would leave a location behind and the case would
+  // pass for the wrong reason. In a real browser `window` *is*
+  // the global object; the stub being laxer than that is the
+  // thing that makes such a test lie.
+  const restoreWindow = swap("window", undefined);
+  const restoreDocument = swap("document", undefined);
+  const restoreNavigator = swap("navigator", undefined);
+  const restoreLocation = swap("location", undefined);
+
+  try {
+    const factory = new EventFactory(new DebugController());
+
+    const tracked = factory.track("Signed up", { plan: "pro" });
+    const paged = factory.page();
+
+    // Both produce a real event rather than throwing.
+    assert.equal(tracked.event.name, "Signed up");
+    assert.match(tracked.event.id, UUID);
+    assert.ok(tracked.sessionId, "a session is not a browser thing");
+
+    // And the envelope is visibly empty rather than absent, so
+    // a collector can tell "no browser" from "no data".
+    assert.equal(tracked.url, "");
+    assert.equal(tracked.userAgent, "");
+    assert.equal(tracked.referrer, null);
+
+    assert.equal(paged.event.type, "page");
+    assert.equal(paged.event.name, "", "no path to read, no path invented");
+    assert.deepEqual(paged.event.properties, { title: "" });
+  } finally {
+    restoreLocation();
+    restoreNavigator();
+    restoreDocument();
+    restoreWindow();
+  }
+});
+
 test("page() defaults to the current page and lets callers override", () => {
   const factory = new EventFactory(new DebugController());
 
@@ -700,23 +637,23 @@ test("HttpDestination posts one batch with the configured headers", async () => 
   const seen = capture("fetch", async () => ({ ok: true, status: 200 }));
 
   try {
-    const debug = new DebugController({ enabled: true });
+    const debug = new DebugController(true);
 
     const destination = new HttpDestination(
       {
         endpoint: "/api/analytics/events",
-        apiKey: "key-1",
-        headers: { "X-Tenant": "acme" },
+        headers: {
+          "X-Tenant": "acme",
+          // Auth is just a header. There is no `apiKey`
+          // shorthand: it would pick the header name, and
+          // collectors do not all agree on one.
+          "X-API-Key": "key-1",
+        },
       },
       debug,
     );
 
-    const sent = [];
-
-    debug.registerDebugPlugin({
-      name: "watcher",
-      onEvent: event => sent.push(event),
-    });
+    const sent = observeDebug(debug);
 
 
     const payload = context();
@@ -739,7 +676,7 @@ test("HttpDestination posts one batch with the configured headers", async () => 
     });
     assert.deepEqual(JSON.parse(init.body), { events: [payload] });
 
-    assert.deepEqual(sent.map(e => e.stage), ["sent"]);
+    assert.deepEqual(sent.stages, ["sent:Signed up"]);
   } finally {
     seen.restore();
   }
@@ -749,19 +686,14 @@ test("a rejected request is reported as a transport error", async () => {
   const restore = swap("fetch", async () => ({ ok: false, status: 500 }));
 
   try {
-    const debug = new DebugController({ enabled: true });
+    const debug = new DebugController(true);
 
     const destination = new HttpDestination(
       { endpoint: "/api/analytics/events" },
       debug,
     );
 
-    const sent = [];
-
-    debug.registerDebugPlugin({
-      name: "watcher",
-      onEvent: event => sent.push(event),
-    });
+    const sent = observeDebug(debug);
 
 
     await assert.rejects(

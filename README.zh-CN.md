@@ -91,8 +91,8 @@ analytics/
     queue/                  EventQueue：批处理、溢出丢弃（无重试）
     transport/              Destination 端口 + HttpDestination（HTTP POST，
                             超时 + keepalive 门禁）
-    debug/                  DebugController、事件总线、插件注册表、
-                            一个 console 内置插件
+    debug/                  DebugController —— console sink，以及它打印的
+                            stage / reason 词汇表
     dom.ts                  hasDom() —— 构造期访问 DOM 的守卫
     warn.ts                 warnOnce() —— 降级时"只警告一次、绝不静默"
   index.ts                  公开 barrel
@@ -203,8 +203,14 @@ analytics/index.ts    全部
 
 **两个探针在无 DOM 时构造与启动都是安全的。** 服务端渲染会建出整条探针链，
 然后发现自己没有东西可监听，所以 `canStart()` 返回 `hasDom()`，
-`start()` 让探针保持停止而不是抛错。SDK 在任何地方都能构造、装配、启动、
-销毁；只有*记录事件*需要浏览器。
+`start()` 让探针保持停止而不是抛错。
+
+**记录事件在那里也能工作。** `track()` 与 `page()` 原本都需要浏览器：
+`page()` 通过默认参数读 `window.location`，而**默认参数在调用点求值**，
+所以服务端渲染会丢掉事件 —— 而且是用一个进程级的警告报告的，
+于是第一次之后的每次渲染都同样静默地失败。现在页面上下文走一个会降级的
+读取器，所以服务端渲染出的事件带的是空的 `url` 与 `userAgent`：
+**看得见地不完整，而不是缺失**。不抛错，也不静默丢事件。
 
 ### 隐私
 
@@ -234,8 +240,8 @@ track() → queued → flushing ──ok──▶ 移除
 | `flushInterval` | `1000` | 自动 flush 前的毫秒数 |
 | `timeoutMs` | `10000` | 请求允许在途多久；`0` 关闭 |
 | `probes` | `[]` | 要装配的探针工厂；见[入口](#入口) |
-| `debug` | 关闭 | `{ enabled, console }`；见 [debug 插件](#debug-插件) |
-| `apiKey` / `headers` | — | 请求上的额外认证 / 头 |
+| `debug` | `false` | 把流水线报到 console；见 [debug 输出](#debug-输出) |
+| `headers` | — | 每个请求的额外头；**认证走这里** |
 
 缓冲区上限 500 条，**不可配置**。满了就丢最旧事件，并以
 `failed · queue-overflow` 上报 —— 与 `undeliverable` 是不同的 reason：
@@ -298,51 +304,44 @@ track() → queued → flushing ──ok──▶ 移除
 
 ---
 
-## debug 插件
+## debug 输出
 
-debug 是与探针**不同的**扩展点：插件观察流水线，探针产生事件。它们不是
-一件事的两种叫法，也不能互相替代。
-
-`core/debug/` 只观察，从不参与投递。它的 `emit()` 点在引擎内部
-（factory、queue、transport），所以插件能看到宿主永远看不到的事件。
+只有一个 sink：console。`core/debug/` 只观察，从不参与投递。它的 `emit()` 点在
+引擎内部（factory、queue、transport），所以它能报出宿主永远看不到的东西。
 
 ```ts
-import { CONSOLE_PLUGIN } from "analytics";
-
-analytics.debug.registerDebugPlugin({
-  name: "my-sink",
-  onEvent(event) {
-    if (event.stage === "sent") myCounter.increment();
-  },
+new Analytics({
+  endpoint: "/api/analytics/events",
+  debug: true,
 });
 
-analytics.debug.debugPlugins;          // ["console", "my-sink"]
-analytics.debug.unregisterDebugPlugin(CONSOLE_PLUGIN);
+// CREATED · Signup  { name: "Signup", properties: {} }
+// QUEUED · Signup   { … }
+// FLUSHING · Signup { … }
+// SENT · Signup     { … }
 ```
 
-- **插件不能搞崩页面。** 每个插件各自包在自己的 try/catch 里：
-  一个抛异常的插件过去会一路穿过 `DebugController`、`EventFactory` 冒进
-  宿主应用自己的 click handler。现在它只警告一次，连续失败三次的插件会被
-  退订（并从 `debugPlugins` 里移除），而不是被永远调用下去。
-- **每个观察者都有名字。** 没有匿名 `subscribe()`。注册表点不出名字的订阅者，
-  就是 `destroy()` 摘不掉的订阅者 —— 名字正是重点，它让注册表成为唯一的入口，
-  因而是穷尽的。（这里原本还有一个公开的 event bus，它在自己的监听器集合之外
-  另存一份账，于是 `bus.subscribe(fn)` 能活得比它观察的 SDK 更久。）
-- `destroy()` / `close()` 会释放所有插件，所以宿主注册的插件不会活得比 SDK 长。
-  插件的 `stop()` 同样包在 try/catch 里，而且它的条目**先**离开注册表 ——
-  拆卸时抛错不会让一个已摘掉的插件还留在名单上。
+**一个布尔，不是配置对象。** 这里原本是 `{ enabled, console }`，
+而只有一个 sink 时两个标志只能同时为真 —— `console: true, enabled: false`
+什么都不报，`enabled: true, console: false` 则是要一个观察者却没给它名字。
+一件事两个名字，多了一个。
 
-内置项只有一个，而且它也是普通插件，按名字安装：
+`analytics.debug.console(false)` 可以在不重建 SDK 的情况下让它闭嘴，
+`console(true)` 再把它打开。**这个开关是唯一的开关** —— 没开 debug 也能在运行期
+打开，而双标志版本做不到（没 `enabled` 的 controller 上写 `console: true` 无效）。
 
-| 名字 | 模块 | 备注 |
-| --- | --- | --- |
-| `console` | `core/debug/console-plugin.ts` | 无状态；console 日志器 |
+**没有插件注册表，也不打算有。** 它存在是为了让第二个 sink 进来，而第二个 sink
+不存在 —— 宿主想拿事件去别处，就包一层 `track()`，或者读 console。它要求的那套
+机制（每个观察者一个名字、可选 `stop()` 拆卸、一个装它们的 Map、以及底下用来
+隔离抛错者的 bus）是 250 行，只服务一个调用者。
 
-`debug: { console: true }` 因此意味着"安装这个名字"，它也可以像自定义插件
-那样被移除。宿主自己注册了同名插件时，以宿主为准：这个开关的意思是"该有个
-console 日志器"，不是"不管现在挂的是什么都装一个上去"。
+换来的是以前最难做对的那条性质：**没有东西需要被记住。** 早一版设计有个公开的
+event bus，它的 `subscribe()` 收匿名函数，而拆卸走的是另一个结构 ——
+于是一个朴素的 `bus.subscribe(fn)` 能活得比它观察的 SDK 更久。现在只有一个 sink
+且没法加第二个，那一类泄漏连发生的地方都没有。
 
----
+`destroy()` 与 `close()` 会停止上报。`destroy()` 是 fire-and-forget（它在最后一次
+flush 的 `.finally()` 里停，所以最后一个 `sent` 仍会报出来）；`close()` 可等待。
 
 ## 构建
 
@@ -382,11 +381,11 @@ npm --prefix tests run test
   探针、抛错的工厂被跳过）、监听计数、端到端事件流水线
 - `queue.test.mjs` —— 被拒批次一次即丢弃并上报、重试接口已彻底移除、
   `flush()` 永不 reject、溢出丢最旧、销毁清空每个监听器
-- `debug-plugin.test.mjs` —— 插件观察整条流水线、同名注册替换而非翻倍、
-  unregister 静默解绑
+- `debug-console.test.mjs` —— console 报出每个阶段、失败时说明是四种结局里的
+  哪一种、`console(false)` 静音但不上报、`stop()` 释放它持有的一切
 - `architecture.test.mjs` —— 下面那些不变量
 - `robustness.test.mjs` —— 没有 `crypto.randomUUID`、storage 被禁用或缺失、
-  抛异常的插件、永不 settle 的请求、`keepalive` 门禁、SSR 构造、并发
+  `destroy()` 停掉 debug 上报、永不 settle 的请求、`keepalive` 门禁、SSR 构造、并发
   `flush()` 共用一个请求、`close()` 排空缓冲区，外加 ids / factory /
   session / destination 的单元测试
 
@@ -399,7 +398,7 @@ npm --prefix tests run test
   正是这一点让它们能被孤立测试
 - 没有任何引擎文件 import 探针 —— 所以 `probes` 是一份工厂函数清单，
   新增探针是宿主改动而不是引擎改动
-- 没有匿名的 debug 订阅 —— 每个观察者都有名字，`destroy()` 才够得着
+- debug 层只有一个 sink，且无法注册第二个 —— 于是没有 `destroy()` 够不着的订阅者
 - `core/probes` 之外没有文件挂监听器或定时器，只有那三个拥有自己定时器
   且每一个都成对移除的文件例外
 - 页面三键（`pagePath` / `pageUrl` / `pageTitle`）只从

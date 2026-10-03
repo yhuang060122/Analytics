@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { installBrowser, sleep } from "./browser-stub.mjs";
+import { installBrowser, observeDebug, sleep } from "./browser-stub.mjs";
 
 const env = installBrowser();
 const require = env.require;
@@ -59,17 +59,8 @@ const ok = (sent = []) => {
 };
 
 const queueWith = (destination, options = {}) => {
-  const debug = new DebugController({ enabled: true });
-  const stages = [];
-  const reasons = [];
-
-  debug.registerDebugPlugin({
-    name: "recorder",
-    onEvent(e) {
-      stages.push(`${e.stage}:${e.context.event.name}`);
-      if (e.reason) reasons.push(e.reason);
-    },
-  });
+  const debug = new DebugController(true);
+  const seen = observeDebug(debug);
 
   const queue = new EventQueue(destination, debug, {
     batchSize: 100,
@@ -77,14 +68,19 @@ const queueWith = (destination, options = {}) => {
     ...options,
   });
 
-  return { queue, stages, reasons };
+  // The observation object itself, not copies of what it holds.
+  // A getter here would be worse than useless: callers destructure
+  // the result (`const { stages } = queueWith(...)`), which reads
+  // a getter once and keeps the value — a snapshot taken before
+  // a single event was emitted.
+  return { queue, seen };
 };
 
 test("a refused batch is dropped, and reported rather than retried", async () => {
   env.reset();
 
   const destination = failing();
-  const { queue, stages, reasons } = queueWith(destination);
+  const { queue, seen } = queueWith(destination);
 
   queue.enqueue(ctx("A"));
 
@@ -100,9 +96,9 @@ test("a refused batch is dropped, and reported rather than retried", async () =>
 
   // Dropping data is only acceptable if it is visible. With no
   // retry budget, the report IS the last word on the event.
-  const failures = stages.filter((s) => s.startsWith("failed:"));
+  const failures = seen.stages.filter((s) => s.startsWith("failed:"));
   assert.equal(failures.length, 1, "exactly one terminal failure is reported");
-  assert.equal(reasons.at(-1), "undeliverable");
+  assert.equal(seen.reasons.at(-1), "undeliverable");
 
   queue.stop();
 });
@@ -145,7 +141,7 @@ test("a full queue drops the oldest event instead of growing forever", () => {
   env.reset();
 
   const destination = ok();
-  const { queue, stages, reasons } = queueWith(destination);
+  const { queue, seen } = queueWith(destination);
 
   // The cap is a constant now, so reaching it means 500
   // enqueues rather than four. Cheap enough, and it tests the
@@ -160,12 +156,12 @@ test("a full queue drops the oldest event instead of growing forever", () => {
 
   assert.equal(queue.size, CAP, "the buffer never exceeds the cap");
   assert.equal(
-    stages.includes("failed:E0"),
+    seen.stages.includes("failed:E0"),
     true,
     "the oldest event is the one dropped",
   );
   assert.equal(
-    stages.includes("queued:Overflow"),
+    seen.stages.includes("queued:Overflow"),
     true,
     "the newest is the one kept",
   );
@@ -173,7 +169,7 @@ test("a full queue drops the oldest event instead of growing forever", () => {
   // Overflow is a drop, not a request failure: it never left
   // the buffer, and a dashboard must be able to tell the two
   // apart without parsing the error string.
-  assert.deepEqual(reasons, ["queue-overflow"]);
+  assert.deepEqual(seen.reasons, ["queue-overflow"]);
 
   queue.stop();
 });
@@ -232,14 +228,10 @@ test("a transport failure is tagged transport-error", async () => {
     endpoint: "/api/analytics/events",
     batchSize: 100,
     flushInterval: 100000,
-    debug: { enabled: true },
+    debug: true,
   });
 
-  const seen = [];
-  analytics.debug.registerDebugPlugin({
-    name: "seen",
-    onEvent: (e) => seen.push(e),
-  });
+  const seen = observeDebug(analytics.debug);
 
   analytics.track("Lost Event");
   await analytics.flush();

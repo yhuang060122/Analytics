@@ -1,6 +1,7 @@
 import { BaseTracker } from "../api/tracker";
 import type { EventRecorder } from "../api/tracker";
 import { hasDom } from "../dom";
+import { readPageContext } from "../domain/page-context";
 
 export class PageTracker extends BaseTracker {
 
@@ -89,9 +90,11 @@ export class PageTracker extends BaseTracker {
     this.recorder.track(
       "Page Duration",
       {
-        pagePath: this.currentPath,
-
-        pageTitle: document.title,
+        // The shared reader, so these three keys cannot drift
+        // from the ones on an `Element Clicked`. This file used
+        // to read `document.title` itself, which is the exact
+        // duplication the read-then-spread form exists to stop.
+        ...readPageContext(),
 
         durationMs: duration,
       }

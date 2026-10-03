@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { installBrowser, sleep } from "./browser-stub.mjs";
+import { installBrowser, observeDebug, sleep } from "./browser-stub.mjs";
 
 const env = installBrowser();
 const require = env.require;
@@ -191,19 +191,14 @@ test("event pipeline is unchanged: click -> queued -> flushing -> sent", async (
   const analytics = new Analytics({
     ...config,
     batchSize: 1,
-    debug: { enabled: true },
+    debug: true,
   });
 
   const click = new ClickTracker(analytics);
   click.start();
   analytics.registerTracker(click);
 
-  const stages = [];
-  analytics.debug.registerDebugPlugin({
-    name: "stages",
-    onEvent: (event) =>
-      stages.push(`${event.stage}:${event.context.event.name}`),
-  });
+  const seen = observeDebug(analytics.debug);
 
   const element = {
     getAttribute: () => "Buy NVDA",
@@ -219,7 +214,7 @@ test("event pipeline is unchanged: click -> queued -> flushing -> sent", async (
   await analytics.flush();
   await sleep(20);
 
-  assert.deepEqual(stages, [
+  assert.deepEqual(seen.stages, [
     "created:Element Clicked",
     "queued:Element Clicked",
     "flushing:Element Clicked",
@@ -299,15 +294,13 @@ test("a probe factory is handed the recorder, and needs nothing else", () => {
 test("a probe factory may pass options through to its probe", () => {
   env.reset();
 
-  const events = [];
-
   const analytics = new Analytics({
     ...config,
     // Debug has to be on for the observer below to see anything,
     // which is worth stating: a version of this test that read
     // the batches instead would have passed while asserting
     // nothing about which attribute matched.
-    debug: { enabled: true },
+    debug: true,
     // The reason a factory is used instead of a class: options
     // still reach the probe constructor.
     probes: [
@@ -316,12 +309,7 @@ test("a probe factory may pass options through to its probe", () => {
     ],
   });
 
-  analytics.debug.registerDebugPlugin({
-    name: "seen",
-    onEvent: (e) => {
-      if (e.stage === "created") events.push(e.context.event);
-    },
-  });
+  const seen = observeDebug(analytics.debug);
 
   analytics.start();
 
@@ -359,8 +347,13 @@ test("a probe factory may pass options through to its probe", () => {
     },
   });
 
+  // Only the "created" stage: the later stages carry the same
+  // event again, and what is under test is which element the
+  // probe matched in the first place.
   assert.deepEqual(
-    events.map((e) => e.properties.element),
+    seen
+      .filter((e) => e.stage === "created")
+      .map((e) => e.context.event.properties.element),
     ["Tapped"],
     "the custom attribute is the one that matched",
   );

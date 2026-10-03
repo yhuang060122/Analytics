@@ -1,252 +1,135 @@
 // core/debug/debug-controller.ts
 
-import { warnOnce } from "../warn";
-import { CONSOLE_PLUGIN, createConsolePlugin } from "./console-plugin";
-import type { DebugEvent } from "./debug-event";
-
-export interface DebugOptions {
-  enabled?: boolean;
-  console?: boolean;
-}
+import type { DebugEvent, PipelineStage } from "./debug-event";
 
 /**
- * The debug port: anything that wants to observe the pipeline
- * implements this instead of being wired into the engine.
+ * One colour per pipeline stage.
  *
- * `onEvent` is the only required member; `stop()` is the
- * teardown hook for a plugin that owns something — a timer, a
- * socket, a subscription of its own. It is called on
- * `unregisterDebugPlugin()` and when the SDK is destroyed, so a
- * plugin never has to detach by hand.
- *
- * There is no `start()`: a plugin is built and started by
- * whoever constructs it, which keeps the port to two members.
+ * Typed with `Record<PipelineStage, ...>` so adding a stage to
+ * the union fails to compile until a colour exists for it.
  */
-export interface DebugPlugin {
-
-  /**
-   * Identity. Registering a plugin with a name that is already
-   * taken replaces the previous one instead of double-delivering
-   * every event to both copies — a hot reload would otherwise
-   * leave two of everything subscribed.
-   *
-   * A name is also what makes a plugin detachable. There is
-   * deliberately no anonymous subscription: a subscriber the
-   * SDK cannot name is a subscriber `destroy()` cannot remove,
-   * which is how the previous bus-based design leaked.
-   */
-  readonly name: string;
-
-  onEvent(event: DebugEvent): void;
-
-  /** Optional teardown. Called on unregister and on destroy. */
-  stop?(): void;
-
-}
+const STAGE_COLORS: Record<PipelineStage, string> = {
+  created: "#64748B",
+  queued: "#F59E0B",
+  flushing: "#3B82F6",
+  sent: "#22C55E",
+  failed: "#EF4444",
+};
 
 /**
- * How many failures in a row earn a plugin its removal.
+ * What the pipeline reports about itself.
  *
- * Three, not one: a plugin may well throw on the first event
- * because it is still warming up its own client. Throwing on
- * *every* event is a plugin that is never going to work.
- */
-const MAX_CONSECUTIVE_FAILURES = 3;
-
-interface PluginEntry {
-  plugin: DebugPlugin;
-  failures: number;
-}
-
-/**
- * The pipeline's observer registry.
+ * One boolean, because there is one thing it can report *to*.
+ * This used to be `{ enabled, console }`, and with a single sink
+ * the two flags could only ever be the same value — `console:
+ * true, enabled: false` reported nothing, and `enabled: true,
+ * console: false` was a host asking for an observer with no way
+ * to name it. Two names for one decision is one too many.
  *
- * It used to delegate to a separate event bus, which meant two
- * books of the same subscribers: this class kept a map by name,
- * the bus a set of listeners plus a side table of failure
- * counts, and the two were kept in step by an `onDrop` callback
- * the bus fired whenever it retired a listener. One registry
- * does the whole job, and there is nothing left that can fall
- * out of sync — or survive `destroy()` without being listed.
+ * There is one sink. It used to be one plugin among several,
+ * behind a registry: `registerDebugPlugin`, a name, a `stop()`
+ * teardown hook, a map to hold them and a bus underneath to
+ * isolate a throwing one from the rest. All of that existed to
+ * let a second sink in, and there is no second sink — a host
+ * that wants events elsewhere wraps `track()`, or reads the
+ * console.
  */
 export class DebugController {
 
-  private readonly plugins = new Map<string, PluginEntry>();
+  private reporting: boolean;
 
-  private readonly enabled: boolean;
+  /**
+   * Test-only sink. NOT public API and not reachable from the
+   * barrel.
+   *
+   * The pipeline's `stage` and `reason` exist nowhere else — the
+   * console formats them for a human — so the suite has to read
+   * them from here. One assignable function rather than a
+   * `subscribe()` method on purpose: a method would be an API,
+   * an API would need documenting and supporting, and a seam is
+   * cheaper than the alternative.
+   *
+   * It *replaces* the console rather than adding to it. The
+   * alternative — both sinks live — would mean every test that
+   * wants to read a `reason` also has to swallow the log
+   * output, and 37 of them do.
+   *
+   * Nothing in the SDK assigns it. A host that finds itself
+   * wanting to is looking for a second sink, and the honest way
+   * to add one is a registry `destroy()` can walk — not this.
+   */
+  observe: ((event: DebugEvent) => void) | undefined = undefined;
 
-  constructor(options: DebugOptions = {}) {
+  constructor(reporting = false) {
 
-    this.enabled = options.enabled === true;
-
-    if (this.enabled && options.console) {
-      this.installBuiltIn();
-    }
+    this.reporting = reporting;
 
   }
 
   emit(event: DebugEvent): void {
 
-    if (!this.enabled) return;
+    if (!this.reporting) return;
 
-    // Snapshot: retiring a plugin below mutates the map while
-    // this loop is running.
-    for (const name of [...this.plugins.keys()]) {
-
-      const entry = this.plugins.get(name);
-
-      if (!entry) continue;
-
-      this.deliver(name, entry, event);
-
-    }
-
-  }
-
-  /**
-   * Install or remove the built-in console logger. This is the
-   * one runtime switch the debug layer keeps: a host that
-   * enabled debug for a diagnostic can turn the noise back off
-   * without giving up the plugins it registered itself.
-   */
-  console(enable: boolean): void {
-
-    if (enable) {
-      this.installBuiltIn();
+    if (this.observe) {
+      this.observe(event);
       return;
     }
 
-    this.unregisterDebugPlugin(CONSOLE_PLUGIN);
+    this.log(event);
 
   }
 
   /**
-   * Attach a plugin: anything that wants to watch the pipeline
-   * without being wired into the SDK.
+   * The one runtime switch: a host that turned debug on to
+   * diagnose something can silence it again without rebuilding
+   * the SDK.
+   */
+  console(enable: boolean): void {
+
+    this.reporting = enable;
+
+  }
+
+  /**
+   * Stop reporting entirely.
    *
-   * Returns an unregister function, so `const off = register(p)`
-   * and `off()` read the same way.
+   * It replaces the `teardown()` that used to walk the plugin
+   * registry. With one sink there is nothing to unregister, but
+   * there is still something to stop: a destroyed instance that
+   * kept logging its final flush looked like a live one. Naming
+   * it `stop()` puts it next to `queue.stop()` in `destroy()`,
+   * which is where it belongs.
+   *
+   * It also releases the test sink, so an observer closure
+   * cannot outlive the instance it was watching.
    */
-  registerDebugPlugin(plugin: DebugPlugin): () => void {
+  stop(): void {
 
-    this.unregisterDebugPlugin(plugin.name);
-
-    this.plugins.set(plugin.name, { plugin, failures: 0 });
-
-    return () => this.unregisterDebugPlugin(plugin.name);
+    this.reporting = false;
+    this.observe = undefined;
 
   }
 
   /**
-   * Detach a plugin by name and, if it has one, run its
-   * teardown. Returns false when nothing was registered under
-   * that name.
+   * `console.log` with the stage as a coloured label.
+   *
+   * The reason rides along on the label: a "failed" event
+   * without it looks exactly like every other failure, and the
+   * reason is the machine-readable half that says which of the
+   * four very different endings this is.
    */
-  unregisterDebugPlugin(name: string): boolean {
+  private log(event: DebugEvent): void {
 
-    const entry = this.plugins.get(name);
+    const label = event.reason
+      ? `${event.stage.toUpperCase()} · ${event.reason}`
+      : event.stage.toUpperCase();
 
-    if (!entry) return false;
-
-    this.plugins.delete(name);
-
-    // The entry is gone from the registry first, so a `stop()`
-    // that throws cannot leave a detached plugin still listed.
-    try {
-
-      entry.plugin.stop?.();
-
-    } catch (error) {
-
-      warnOnce(
-        "plugin-teardown-threw",
-        `a debug plugin's stop() threw; the SDK carried on (${String(error)})`,
-      );
-
-    }
-
-    return true;
-
-  }
-
-  /** Names of the plugins currently attached. */
-  get debugPlugins(): string[] {
-    return [...this.plugins.keys()];
-  }
-
-  /**
-   * Release every plugin, built-in included. Called by
-   * `Analytics.destroy()` / `close()`, so a host-registered
-   * plugin never outlives the SDK.
-   */
-  teardown(): void {
-
-    [...this.plugins.keys()].forEach(name =>
-      this.unregisterDebugPlugin(name)
+    console.log(
+      `%c${label}`,
+      `color:${STAGE_COLORS[event.stage]};font-weight:bold`,
+      event.context.event.name,
+      event.context.event.properties,
     );
-
-  }
-
-  /**
-   * One plugin's turn, isolated.
-   *
-   * The try/catch used to live in the bus and the bookkeeping
-   * here, which is why a throwing plugin had two places to be
-   * forgotten. A failed plugin must not break the host: this
-   * runs inside the SDK's own event emission, which a
-   * `ClickTracker` reaches from the application's click
-   * handler. Observers are exactly the layer where swallowing a
-   * failure is right, because nothing downstream depends on
-   * them.
-   */
-  private deliver(
-    name: string,
-    entry: PluginEntry,
-    event: DebugEvent
-  ): void {
-
-    try {
-
-      entry.plugin.onEvent(event);
-
-      entry.failures = 0;
-
-    } catch (error) {
-
-      entry.failures += 1;
-
-      if (entry.failures < MAX_CONSECUTIVE_FAILURES) {
-
-        warnOnce(
-          "plugin-threw",
-          "a debug plugin threw while handling an event; " +
-            `the SDK carried on (${String(error)})`,
-        );
-
-        return;
-
-      }
-
-      warnOnce(
-        "plugin-disabled",
-        `a debug plugin failed ${entry.failures} times in a row and was ` +
-          `unsubscribed (${String(error)})`,
-      );
-
-      this.unregisterDebugPlugin(name);
-
-    }
-
-  }
-
-  private installBuiltIn(): void {
-
-    // A host plugin already holding the name wins: the flag
-    // means "there should be a console logger", not "install
-    // one over the top of whatever is already there".
-    if (this.plugins.has(CONSOLE_PLUGIN)) return;
-
-    this.registerDebugPlugin(createConsolePlugin());
 
   }
 

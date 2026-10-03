@@ -37,12 +37,11 @@ export class Analytics implements EventRecorder {
   };
 
   constructor(config: AnalyticsConfig) {
-    this.debug = new DebugController(config.debug);
+    this.debug = new DebugController(config.debug === true);
 
     const destination = new HttpDestination(
       {
         endpoint: config.endpoint,
-        apiKey: config.apiKey,
         headers: config.headers,
         timeoutMs: config.timeoutMs,
       },
@@ -121,13 +120,13 @@ export class Analytics implements EventRecorder {
     this.queue.stop();
 
     // Best effort: whatever is still buffered gets one final
-    // chance. The retry timer is already stopped, so this is
-    // the last attempt, not the first of a series.
+    // chance, so this is the last attempt, not the first of a
+    // series.
     //
-    // Debug plugins are torn down once that settles, so they
-    // still see the last "sent" events — but they do not
-    // outlive the instance.
-    void this.flush().finally(() => this.debug.teardown());
+    // Debug reporting stops once that settles — the flush still
+    // reports its "sent" and "failed" events, but a destroyed
+    // instance must not go on logging as if it were live.
+    void this.flush().finally(() => this.debug.stop());
 
   }
 
@@ -147,7 +146,7 @@ export class Analytics implements EventRecorder {
     await this.flush();
 
     this.queue.stop();
-    this.debug.teardown();
+    this.debug.stop();
 
   }
 

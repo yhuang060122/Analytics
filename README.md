@@ -95,8 +95,8 @@ analytics/
     queue/                  EventQueue: batching + overflow drop (no retry)
     transport/              Destination port + HttpDestination (HTTP POST,
                             timeout + keepalive gating)
-    debug/                  DebugController (the registry, the failure
-                            isolation and the one console built-in)
+    debug/                  DebugController — the console sink, and the
+                            stage/reason vocabulary it prints
     dom.ts                  hasDom() guard for construction-time DOM access
     warn.ts                 warnOnce() — degrade loudly, exactly once
   index.ts                  public barrel
@@ -223,9 +223,17 @@ and cannot double-register their listeners by accident — so
 **Both probes are safe to construct and start without a DOM.**
 A server render builds the whole chain and then has nothing to
 listen to, so `canStart()` returns `hasDom()` and `start()`
-leaves the probe stopped instead of throwing. The SDK can be
-constructed, wired, started and destroyed anywhere; only
-*recording* needs a browser.
+leaves the probe stopped instead of throwing.
+
+**Recording works there too.** `track()` and `page()` used to
+need a browser: `page()` read `window.location` through a
+default parameter, which is evaluated at the call site, so a
+server render dropped the event — and reported it with a
+process-wide warning, meaning every render after the first
+failed the same way silently. Now the page context comes from a
+reader that degrades, so a server-rendered event carries an
+empty `url` and `userAgent`: visibly incomplete rather than
+missing. Nothing throws, and nothing is silently dropped.
 
 ### Privacy
 
@@ -258,8 +266,8 @@ track() → queued → flushing ──ok──▶ removed
 | `flushInterval` | `1000` | ms before an automatic flush |
 | `timeoutMs` | `10000` | how long a request may be in flight; `0` disables it |
 | `probes` | `[]` | probe factories to wire; see [Entry point](#entry-point) |
-| `debug` | off | `{ enabled, console }`; see [Debug plugins](#debug-plugins) |
-| `apiKey` / `headers` | — | extra auth / headers on the request |
+| `debug` | `false` | report the pipeline to the console; see [Debug output](#debug-output) |
+| `headers` | — | extra headers on every request; **auth goes here** |
 
 The buffer holds 500 events and is **not configurable**. When it
 is full the oldest event is dropped and reported as
@@ -339,63 +347,57 @@ Teardown releases everything the instance owns:
 
 ---
 
-## Debug plugins
+## Debug output
 
-Debug is a separate extension point from the probes: a plugin
-observes the pipeline, a probe produces events. They are not two
-names for the same thing, and they do not substitute for each
-other.
-
-`core/debug/` watches; it never participates in delivery. Its
-`emit()` calls sit inside the engine (factory, queue, transport),
-which is why a plugin can see events the host never sees.
+One sink: the console. `core/debug/` watches and never
+participates in delivery — its `emit()` calls sit inside the
+engine (factory, queue, transport), so it can report things the
+host never sees.
 
 ```ts
-import { CONSOLE_PLUGIN } from "analytics";
-
-analytics.debug.registerDebugPlugin({
-  name: "my-sink",
-  onEvent(event) {
-    if (event.stage === "sent") myCounter.increment();
-  },
+new Analytics({
+  endpoint: "/api/analytics/events",
+  debug: true,
 });
 
-analytics.debug.debugPlugins;          // ["console", "my-sink"]
-analytics.debug.unregisterDebugPlugin(CONSOLE_PLUGIN);
+// CREATED · Signup  { name: "Signup", properties: {} }
+// QUEUED · Signup   { … }
+// FLUSHING · Signup { … }
+// SENT · Signup     { … }
 ```
 
-- **A plugin cannot break the page.** Each one is called inside
-  its own try/catch: a throwing plugin used to propagate through
-  `DebugController` and `EventFactory` into the host app's own
-  click handler. It now warns once, and a plugin that fails three
-  times in a row is unsubscribed (and dropped from `debugPlugins`)
-  rather than called forever.
-- **Every observer is named.** There is no anonymous
-  `subscribe()`. A subscriber the registry cannot name is one
-  `destroy()` cannot remove, so the name is the whole point — it
-  is what makes the registry the only way in, and therefore
-  exhaustive. This replaced a public event bus that kept its own
-  listener set alongside the registry, where a bare
-  `bus.subscribe(fn)` outlived the SDK it was watching.
-- `destroy()` / `close()` release every plugin, so a host-registered
-  plugin never outlives the SDK. A plugin's `stop()` runs inside a
-  try/catch too, and its entry leaves the registry first — a
-  teardown that throws cannot leave a detached plugin listed.
+One boolean, not an options object. There was `{ enabled,
+console }` here, and with a single sink the two flags could only
+ever be the same value — `console: true, enabled: false`
+reported nothing, and `enabled: true, console: false` asked for
+an observer with no way to name one. Two names for one decision
+is one too many.
 
-There is one built-in, and it is a plugin like any other,
-installed by name:
+`analytics.debug.console(false)` silences it again without
+rebuilding the SDK, and `console(true)` brings it back. That
+switch is the only one: a host that built without debug can
+turn it on at runtime, which the two-flag version could not do
+(`console: true` on a never-enabled controller did nothing).
 
-| Name | Module | Notes |
-| --- | --- | --- |
-| `console` | `core/debug/console-plugin.ts` | stateless; the console logger |
+There is no plugin registry, and there is not meant to be one.
+It existed to let a second sink in, and there is no second sink
+— a host that wants the events elsewhere wraps `track()`, or
+reads the console. The machinery it required (a name per
+observer, a `stop()` teardown hook, a map to hold them, and a
+bus underneath to isolate a throwing one) was 250 lines
+serving one caller.
 
-`debug: { console: true }` therefore means "install this name",
-and it can be removed the same way as a custom plugin. A host
-plugin that already holds the name wins: the flag means "there
-should be a console logger", not "install one over the top of
-whatever is already there".
+What that buys is the property that was hardest to get right
+before: **there is nothing to keep track of.** An earlier design
+had a public event bus whose `subscribe()` took an anonymous
+function, and the teardown walked a different structure — so a
+plain `bus.subscribe(fn)` outlived the SDK it was watching. With
+one sink and no way to add a second, that class of leak has
+nowhere to happen.
 
----
+`destroy()` and `close()` stop reporting. `destroy()` is
+fire-and-forget (it stops in a `.finally()` on the last flush,
+so the final `sent` is still reported); `close()` is awaitable.
 
 ## Build
 
@@ -446,12 +448,14 @@ npm --prefix tests run test
 - `queue.test.mjs` — a refused batch is dropped and reported, the
   retry surface is gone, `flush()` never rejects, overflow drops
   the oldest, teardown clears every listener
-- `debug-plugin.test.mjs` — plugins observe the whole pipeline,
-  same-name registration replaces instead of doubling, unregister
-  detaches silently
+- `debug-console.test.mjs` — the console reports every stage, a
+  failure names which of the four endings it was, `console(false)`
+  silences it without disabling reporting, `stop()` releases
+  everything it was holding
 - `architecture.test.mjs` — the invariants below
 - `robustness.test.mjs` — no `crypto.randomUUID`, storage disabled
-  or absent, a throwing plugin, a request that never settles,
+  or absent, `destroy()` stopping debug reporting, a request that
+  never settles,
   `keepalive` gating, SSR construction, a concurrent `flush()`
   sharing one request, `close()` draining the buffer, plus unit
   tests for ids / factory / session / destination
@@ -465,8 +469,8 @@ fails the suite rather than being discovered later:
   facade, which is what keeps them testable in isolation
 - no engine file imports a probe, so `probes` stays a list of
   factories and adding one is a host change, not an engine change
-- nothing offers an anonymous debug subscription, so every
-  observer is a name `destroy()` can reach
+- the debug layer has one sink and no way to register a second,
+  so there is no subscriber a `destroy()` cannot reach
 - nothing outside `core/probes` attaches a listener or a timer,
   apart from the three files that own theirs and pair every one
 - the page triple (`pagePath` / `pageUrl` / `pageTitle`) is read

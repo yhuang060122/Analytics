@@ -5,7 +5,12 @@ import type { Destination, SendOptions } from "./destination";
 
 export interface HttpDestinationOptions {
   endpoint: string;
-  apiKey?: string;
+
+  /**
+   * Extra headers on every request. Auth goes here — there is no
+   * `apiKey` shorthand, because it would pick the header name for
+   * the host, and collectors do not all agree on one.
+   */
   headers?: Record<string, string>;
 
   /**
@@ -144,10 +149,6 @@ export class HttpDestination implements Destination {
 
     return {
       "Content-Type": "application/json",
-
-      ...(this.options.apiKey && {
-        "X-API-Key": this.options.apiKey,
-      }),
 
       ...this.options.headers,
     };

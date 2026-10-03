@@ -21,10 +21,9 @@ const analytics = new Analytics({
   batchSize: 5,
   flushInterval: 2000,
 
-  debug: {
-    enabled: true,
-    console: true,
-  },
+  // One boolean: the console is the only sink, so there is
+  // nothing a second field could decide.
+  debug: true,
 
   probes: [
     recorder => new PageTracker(recorder),

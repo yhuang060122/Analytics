@@ -147,21 +147,40 @@ test("page context is read from one module", () => {
   // by hand while another probe read them from a helper, so the
   // two halves could drift apart. Nothing outside
   // domain/page-context.ts may carry the full triple.
+  //
+  // "Carry" means spell it out, not read it. A file that calls
+  // `readPageContext()` and uses what it returns is exactly what
+  // this rule asks for — the factory does that in three places,
+  // and it was flagged here before the rule learned the
+  // difference. So the check looks for the three names as object
+  // keys of a literal or a type, which is what "writing its own"
+  // actually looks like.
+  const TRIPLE = ["pagePath", "pageUrl", "pageTitle"];
+
   const offenders = walk(join(root, "analytics"))
     .filter((file) => file.endsWith(".ts"))
     .filter((file) => !file.endsWith(join("domain", "page-context.ts")))
-    .filter((file) => {
+    .flatMap((file) => {
       const code = codeOf(file);
 
-      return ["pagePath", "pageUrl", "pageTitle"].every((key) =>
-        new RegExp(`\\b${key}\\b`).test(code),
-      );
+      // Read the triple from a literal this file defines, not
+      // from a call it makes.
+      const ownLiteral = new RegExp(
+        `\\{\\s*(?:[^{}]*,\\s*)?${TRIPLE[0]}\\s*:`,
+      ).test(code);
+
+      const ownType = new RegExp(
+        `(?:interface|type)\\s+\\w+[^{]*\\{[^}]*\\b${TRIPLE[1]}\\s*:`,
+        "s",
+      ).test(code);
+
+      return ownLiteral || ownType ? [file.slice(root.length + 1)] : [];
     });
 
   assert.deepEqual(
     offenders,
     [],
-    "import readPageContext() instead of spelling the triple out again",
+    "call readPageContext(); do not define your own pagePath/pageUrl/pageTitle",
   );
 });
 
@@ -213,7 +232,9 @@ test("every probe inherits BaseTracker instead of hand-rolling it", () => {
 });
 
 test("shared types and constants are declared once", () => {
-  const shared = ["DebugOptions", "STAGE_COLORS"];
+  // `DebugOptions` used to be here. It is gone: the config is a
+  // boolean now, so there was no second flag left to describe.
+  const shared = ["STAGE_COLORS"];
 
   const files = walk(join(root, "analytics")).filter((file) =>
     file.endsWith(".ts"),
@@ -278,11 +299,11 @@ test("every listener the SDK registers can be removed again", () => {
   });
 });
 
-test("the debug port is public", () => {
-  // A plugin author cannot type `onEvent(event: DebugEvent)`
-  // if these are not exported from the root barrel, and a
-  // missing export is otherwise invisible until someone tries
-  // to import it.
+test("the debug vocabulary is public, the machinery is not", () => {
+  // A host reads console output and matches on the stage names
+  // and the failure reasons, so those three types have to be
+  // importable. What it cannot have is a way to register a
+  // sink: there is one sink, and it is the console.
   const barrel = readFileSync(join(root, "analytics", "index.ts"), "utf8");
 
   assert.match(
@@ -296,11 +317,7 @@ test("the debug port is public", () => {
     "utf8",
   );
 
-  // Both names a plugin author needs. `export type` rather than
-  // `export *` is deliberate: the debug layer is now three files
-  // behind one facade, and a blanket re-export would make an
-  // internal helper public the moment it moved.
-  ["DebugEvent", "DebugPlugin"].forEach((name) => {
+  ["DebugEvent", "DebugFailureReason", "PipelineStage"].forEach((name) => {
     assert.match(
       debugIndex,
       new RegExp(`export type \\{[^}]*\\b${name}\\b`),
@@ -310,78 +327,59 @@ test("the debug port is public", () => {
 
   assert.doesNotMatch(
     debugIndex,
-    /export \\* from/,
+    /export \* from/,
     "the debug barrel names its exports; it must not blanket-re-export",
   );
 
-  const controller = readFileSync(
-    join(coreDir, "debug", "debug-controller.ts"),
-    "utf8",
-  );
-
-  assert.match(controller, /registerDebugPlugin\(/);
-  assert.match(controller, /unregisterDebugPlugin\(/);
-
-  // One registry, not two. The bus this replaced kept its own
-  // listener set and failure table alongside the controller's
-  // map, and an anonymous subscriber could therefore outlive
-  // teardown() — a leak the architecture could not see.
-  assert.doesNotMatch(
-    controller,
-    /readonly bus\b/,
-    "the controller must not expose a subscription path that teardown() cannot walk",
-  );
-});
-
-test("nothing in the SDK offers an anonymous debug subscription", () => {
-  // The one hole the debug layer had: `analytics.debug.bus` was
-  // public, so a host could observe the pipeline without
-  // registering a named plugin, and `teardown()` had no way to
-  // reach it. Everything that wants to watch must go through
-  // `registerDebugPlugin`, which is the registry teardown walks.
-  const offenders = walk(join(root, "analytics"))
-    .filter((file) => file.endsWith(".ts"))
-    .filter((file) => /\bsubscribe\s*\(/.test(codeOf(file)))
-    .map((file) => file.slice(root.length + 1));
-
-  assert.deepEqual(
-    offenders,
-    [],
-    "subscribe() on a debug observer is how an unremovable listener gets created",
-  );
-});
-
-test("the debug facade wires no sink of its own", () => {
-  // The controller used to construct the sinks inline, which
-  // is why there was no way to add a third one. It is now a
-  // registry plus one built-in name, so the assertion is the
-  // stronger form: the facade may not reach a sink at all.
+  // The registry is gone, and these are the three ways it could
+  // come back. Each one is a name a host could hold that
+  // `stop()` would then have to find.
+  // `codeOf`, not readFileSync: the controller's comment explains
+  // at length why the registry went away, and naming it there is
+  // documentation, not a way back in.
   const controller = codeOf(
     join(coreDir, "debug", "debug-controller.ts"),
   );
 
-  assert.doesNotMatch(
+  ["registerDebugPlugin", "debugPlugins", "readonly bus"].forEach((name) => {
+    assert.doesNotMatch(
+      controller,
+      new RegExp(name),
+      `${name} is how a subscriber outlives destroy(); the console is the only sink`,
+    );
+  });
+});
+
+test("the test sink replaces the console rather than joining it", () => {
+  // 37 tests read `stage` and `reason` off the observe hook, and
+  // the console formats those for a human. If both sinks ran, each
+  // of them would also have to swallow the log output — which is
+  // why `observe` is a replacement, not a second subscriber.
+  const controller = codeOf(
+    join(coreDir, "debug", "debug-controller.ts"),
+  );
+
+  assert.match(
     controller,
-    /new DebugInspector\(/,
-    "the DOM panel is gone; nothing may bring it back inline",
+    /if\s*\(this\.observe\)\s*\{[\s\S]*?return;/,
+    "an assigned observe must short-circuit, or every observer test also logs",
+  );
+
+  // And the config stays a boolean. Two flags for one sink is the
+  // shape this replaced; a second option field would bring it
+  // back with a meaning attached.
+  const config = readFileSync(join(coreDir, "api", "config.ts"), "utf8");
+
+  assert.match(
+    config,
+    /debug\?:\s*boolean;/,
+    "debug must be one boolean — the console is the only sink",
   );
 
   assert.doesNotMatch(
-    controller,
-    /console\.log\(/,
-    "logging belongs to console-plugin.ts, not the facade",
-  );
-
-  assert.doesNotMatch(
-    controller,
-    /STAGE_COLORS/,
-    "colour handling belongs to the plugins, not the facade",
-  );
-
-  assert.doesNotMatch(
-    controller,
-    /document\.|createElement/,
-    "the debug layer must not touch the DOM",
+    config,
+    /interface\s+DebugOptions/,
+    "a second flag for one sink is a decision with nowhere to go",
   );
 });
 
@@ -396,8 +394,6 @@ test("types are imported with import type", () => {
     "AnalyticsContext",
     "AnalyticsEvent",
     "DebugEvent",
-    "DebugOptions",
-    "DebugPlugin",
     "Destination",
     "EventRecorder",
     "PipelineStage",
